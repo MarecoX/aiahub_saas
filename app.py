@@ -3,19 +3,19 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Carrega Variaveis de Ambiente (DB_URL, Keys)
-load_dotenv(dotenv_path="../.env")
+# Carrega Variaveis de Ambiente (Local: .env | Cloud: Streamlit Secrets)
+# No Streamlit Cloud, secrets são carregados automaticamente via st.secrets
+load_dotenv(dotenv_path=".env")  # Tenta local primeiro
+load_dotenv(dotenv_path="../.env")  # Fallback para pasta pai
 
-# Setup Paths
-sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts'))
-sys.path.append(os.path.join(os.path.dirname(__file__), 'views'))
+# Setup Paths - adiciona o diretório atual ao path para imports funcionarem
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
-try:
-    from scripts.auth_manager import verify_login
-    from views.admin_view import render_admin_view
-    from views.client_view import render_client_view
-except ImportError as e:
-    st.error(f"Erro de Importação: {e}")
+# Imports diretos (sem try/except para ver erros reais no Cloud)
+from scripts.auth_manager import verify_login
+from views.admin_view import render_admin_view
+from views.client_view import render_client_view
 
 # Page Config
 st.set_page_config(page_title="Kestra SaaS", page_icon="🤖", layout="wide")
