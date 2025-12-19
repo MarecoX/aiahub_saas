@@ -23,6 +23,13 @@ logger = logging.getLogger("KestraChainsSaaS")
 
 # Configuração Global
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    try:
+        import streamlit as st
+        OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
+    except:
+        pass
+
 DATABASE_URL = os.environ.get("DATABASE_CONNECTION_URI") or os.getenv("DATABASE_URL")
 
 # --- DATABASE / CHECKPOINTER SETUP ---
@@ -50,6 +57,12 @@ from langchain_core.tools import StructuredTool
 
 # Configura Gemini Client
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_KEY:
+    try:
+        import streamlit as st
+        GEMINI_KEY = st.secrets.get("GEMINI_API_KEY")
+    except:
+        pass
 gemini_client = None
 if GEMINI_KEY:
     try:
