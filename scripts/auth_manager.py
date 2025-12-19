@@ -18,7 +18,7 @@ def verify_login(username, password):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, is_admin, gemini_store_id, system_prompt 
+                SELECT id, name, is_admin, gemini_store_id, system_prompt, followup_config 
                 FROM clients 
                 WHERE username = %s AND password_hash = %s
             """, (username, pwd_hash))
@@ -31,7 +31,8 @@ def verify_login(username, password):
                     "name": row['name'],
                     "is_admin": row['is_admin'],
                     "store_id": row['gemini_store_id'],
-                    "system_prompt": row['system_prompt']
+                    "system_prompt": row['system_prompt'],
+                    "followup_config": row.get('followup_config', {})
                 }
             return None
 
