@@ -15,7 +15,7 @@ from scripts.saas_db import get_connection
 def render_client_view(user_data):
     # user_data = {'id', 'name', 'store_id', 'system_prompt', ...}
     
-    st.title(f"🤖 Kestra AI | {user_data['name']}")
+    st.title(f"🐱‍👤 Build AI | {user_data['name']}")
     
     col_info, col_logout = st.columns([4, 1])
     with col_info:
@@ -26,11 +26,65 @@ def render_client_view(user_data):
             st.rerun()
 
     # --- TABS ---
-    tab_files, tab_prompt, tab_sim, tab_followup = st.tabs(["📂 Meus Arquivos (RAG)", "🧠 Personalidade (Prompt)", "💬 Testar Assistente", "⏰ Follow-up Autônomo"])
+    tab_files, tab_prompt, tab_sim, tab_tools, tab_followup = st.tabs(["📂 Meus Arquivos (RAG)", "🧠 Personalidade (Prompt)", "💬 Testar Assistente", "🔗 Integrações e Ferramentas", "⏰ Follow-up Autônomo"])
 
-    # --- TAB 1: ARQUIVOS (RAG) ---
-    with tab_files:
-        st.header("Gerenciar Conhecimento")
+    # --- TAB: INTEGRAÇÕES ---
+    with tab_tools:
+        st.header("Ferramentas e Integrações")
+        st.info("Conecte seu assistente a sistemas externos.")
+        
+        # Load Config
+        t_config = user_data.get('tools_config', {})
+        if not t_config: t_config = {}
+        
+        # --- Kommo CRM ---
+        st.subheader("Kommo CRM")
+        kommo_cfg = t_config.get('qualificado_kommo_provedor', {})
+        # Se for bool (legado), converte para dict padrão ou vazio
+        if isinstance(kommo_cfg, bool): kommo_cfg = {"active": kommo_cfg}
+        
+        c_kommo_active = st.toggle("Ativar Integração Kommo CRM", value=kommo_cfg.get('active', False))
+        
+        if c_kommo_active:
+            k1, k2 = st.columns(2)
+            k_url = k1.text_input("URL Base (ex: https://dominio.kommo.com)", value=kommo_cfg.get('url', ''))
+            k_token = k2.text_input("Token de Autorização (Bearer ...)", value=kommo_cfg.get('token', ''), type="password")
+            
+            k3, k4 = st.columns(2)
+            k_pipeline = k3.text_input("Pipeline ID (Opcional)", value=str(kommo_cfg.get('pipeline_id', '')))
+            k_status = k4.text_input("Status ID (Lead Qualificado)", value=str(kommo_cfg.get('status_id', '')))
+            
+            # Helper text
+            st.caption("Ao preencher o Status ID, o assistente moverá o card automaticamente quando qualificado.")
+
+        st.divider()
+        if st.button("💾 Salvar Integrações"):
+            # Construct JSON
+            new_tools_config = t_config.copy()
+            new_tools_config['qualificado_kommo_provedor'] = {
+                "active": c_kommo_active,
+                "url": k_url if c_kommo_active else "",
+                "token": k_token if c_kommo_active else "",
+                "pipeline_id": k_pipeline if c_kommo_active else "",
+                "status_id": k_status if c_kommo_active else ""
+            }
+            
+            try:
+                import json
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Ensure column exists logic implicit (if fails, error caught)
+                        cur.execute("UPDATE clients SET tools_config = %s WHERE id = %s", (json.dumps(new_tools_config), user_data['id']))
+                
+                user_data['tools_config'] = new_tools_config
+                st.success("Configurações salvas!")
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e} (A coluna tools_config existe no banco?)")
+
+    # --- TAB 4: FOLLOW-UP ---
+    with tab_followup:
+        st.header("⏰ Follow-up Automático")
+        st.info("Configure mensagens automáticas para enviar quando o cliente para de responder.")
         c_store_id = user_data.get('store_id')
         
         # Validar Store
