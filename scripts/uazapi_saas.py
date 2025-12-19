@@ -59,10 +59,19 @@ async def connect_instance(phone: str = None, api_key: str = None, base_url: str
                 f"{url}/instance/connect",
                 json=payload,
                 headers={"token": f"{token}"},
-                timeout=15.0 
+                timeout=20.0 
             )
-            # Retorna o JSON cru (pode conter base64 ou pairing code)
-            return resp.json()
+            
+            if resp.status_code != 200:
+                logger.error(f"❌ Erro Conexão Uazapi ({resp.status_code}): {resp.text}")
+            
+            try:
+                data = resp.json()
+                # logger.info(f"Connect Response: {data}") # Pode ser grande (base64)
+                return data
+            except Exception:
+                return {"error": f"Invalid JSON ({resp.status_code}): {resp.text}"}
+                
     except Exception as e:
         logger.error(f"Erro Connect Instance: {e}")
         return {"error": str(e)}
