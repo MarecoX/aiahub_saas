@@ -55,7 +55,8 @@ def render_client_view(user_data):
                     else:
                         st.error(f"Erro ao criar no Gemini: {err}")
         
-        # Só mostra upload se tiver algo (mesmo que dummy, para não quebrar layout, mas o aviso acima orienta a correção)
+        # Só mostra upload se tiver algo (após validação acima)
+        if c_store_id:
             # UPLOAD
             uploaded_files = st.file_uploader("Enviar PDFs, CSV, TXT", accept_multiple_files=True)
             if st.button("📤 Enviar para IA"):
