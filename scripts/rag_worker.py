@@ -12,7 +12,7 @@ from saas_db import get_client_config
 from tools_library import get_enabled_tools
 
 # Configuração de Logs
-logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger("KestraRAG")
 
 # Configurações Globais
@@ -132,3 +132,4 @@ async def run_rag():
 
 if __name__ == "__main__":
     asyncio.run(run_rag())
+
