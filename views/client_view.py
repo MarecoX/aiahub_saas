@@ -270,6 +270,10 @@ def render_client_view(user_data):
                 st.caption(f"URL: {api_url}")
                 st.info("Dica: Verifique se o container Uazapi está rodando e se as variáveis de ambiente (UAZAPI_URL) estão corretas.")
 
+            if "error" in status_data:
+                st.error(f"Erro na API: {status_data['error']}")
+                st.caption(f"Tentando conectar em: {api_url}")
+
             state = status_data.get("instance", {}).get("state", "unknown")
             st.metric("Status da Instância", state.upper(), delta="🟢 Online" if state=="open" else "🔴 Offline")
 
@@ -282,6 +286,12 @@ def render_client_view(user_data):
                     with st.spinner("Solicitando conexão..."):
                         try:
                             resp = asyncio.run(connect_instance(phone=phone_num if phone_num else None, api_key=api_key, base_url=api_url))
+                            
+                            # DEBUG: Mostra o JSON cru para entendermos o que está voltando
+                            st.write("Resposta da API (Debug):")
+                            st.json(resp)
+                            
+                            # Tenta extrair QR Code de vários locais possíveis
                             
                             # Tenta extrair QR Code de vários locais possíveis
                             qr_code_data = (
