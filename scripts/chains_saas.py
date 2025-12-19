@@ -85,7 +85,7 @@ def create_knowledge_base_tool(store_id: str):
             
             # Padrão Enterprise: Queries usando a tool File Search no generate_content
             response = gemini_client.models.generate_content(
-                model='gemini-1.5-flash', # ou gemini-2.0-flash-exp se disponível
+                model='gemini-3-flash-preview', # ou gemini-2.0-flash-exp se disponível
                 contents=query,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(
@@ -193,3 +193,4 @@ async def ask_saas(query: str, chat_id: str, system_prompt: str, client_config: 
     except Exception as e:
         logger.error(f"Erro no Agent SaaS: {e}", exc_info=True)
         return "Desculpe, tive um erro interno ao processar sua solicitação inteligente."
+
