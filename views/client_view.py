@@ -217,8 +217,10 @@ def render_client_view(user_data):
         from scripts.uazapi_saas import get_instance_status, connect_instance, disconnect_instance
         
         w_config = user_data.get('tools_config', {}).get('whatsapp', {})
-        api_url = w_config.get('url', os.getenv("UAZAPI_URL"))
-        api_key = w_config.get('key', os.getenv("UAZAPI_KEY"))
+        
+        # Ordem de prioridade (Client DB > Tools Config > Env Var)
+        api_url = user_data.get('api_url') or w_config.get('url') or os.getenv("UAZAPI_URL")
+        api_key = user_data.get('token') or w_config.get('key') or os.getenv("UAZAPI_KEY")
         
         # Se não tiver URL/Key, permite configurar na hora
         if not api_url or not api_key:
