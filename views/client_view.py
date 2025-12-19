@@ -33,12 +33,12 @@ def render_client_view(user_data):
         st.header("Gerenciar Conhecimento")
         c_store_id = user_data.get('store_id')
         
-        # Validar Store
-        is_real_store = c_store_id and "fileSearchStores/" in c_store_id
-        
-        if not is_real_store:
+        if not c_store_id:
             st.warning("⚠️ Seu espaço de arquivos ainda não foi inicializado. Entre em contato com o suporte.")
         else:
+            # Se não tiver o prefixo, adicionamos na chamada (ou deixamos o manager lidar)
+            # Mas para a UI, consideramos 'inicializado' se tiver algum ID.
+            pass
             # UPLOAD
             uploaded_files = st.file_uploader("Enviar PDFs, CSV, TXT", accept_multiple_files=True)
             if st.button("📤 Enviar para IA"):
