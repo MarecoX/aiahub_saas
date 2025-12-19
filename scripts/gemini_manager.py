@@ -11,8 +11,15 @@ logger = logging.getLogger("GeminiManagerV2")
 load_dotenv(dotenv_path="../.env")
 load_dotenv()
 
+import unicodedata
+
 API_KEY = os.getenv("GEMINI_API_KEY")
 client = None
+
+def normalize_to_ascii(text):
+    """Remove acentos e caracteres especiais para evitar erro de Header/ASCII."""
+    if not text: return ""
+    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
 
 if API_KEY:
     try:
@@ -84,7 +91,10 @@ def upload_file_to_store(file_path: str, store_name: str, custom_display_name: s
 
     try:
         final_name = custom_display_name if custom_display_name else os.path.basename(file_path)
-        logger.info(f"📤 Uploading {final_name} to {store_name}...")
+        # Sanitiza para evitar crash de ASCII no SDK
+        safe_name = normalize_to_ascii(final_name)
+        
+        logger.info(f"📤 Uploading {final_name} (as {safe_name}) to {store_name}...")
         
         # Detect MIME
         mime_type, _ = mimetypes.guess_type(file_path)
@@ -103,7 +113,7 @@ def upload_file_to_store(file_path: str, store_name: str, custom_display_name: s
                 file=file_path,
                 file_search_store_name=store_name,
                 config={
-                    'display_name': final_name,
+                    'display_name': safe_name,
                     'mime_type': mime_type 
                 }
             )
