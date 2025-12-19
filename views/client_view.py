@@ -274,7 +274,10 @@ def render_client_view(user_data):
                 st.error(f"Erro na API: {status_data['error']}")
                 st.caption(f"Tentando conectar em: {api_url}")
 
-            state = status_data.get("instance", {}).get("state", "unknown")
+            instance_data = status_data.get("instance", {})
+            # API pode retornar 'state' ou 'status' dependendo da versão
+            state = instance_data.get("state") or instance_data.get("status") or "unknown"
+            
             st.metric("Status da Instância", state.upper(), delta="🟢 Online" if state=="open" else "🔴 Offline")
 
             if state != "open":
