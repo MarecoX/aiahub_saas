@@ -33,12 +33,29 @@ def render_client_view(user_data):
         st.header("Gerenciar Conhecimento")
         c_store_id = user_data.get('store_id')
         
-        if not c_store_id:
-            st.warning("⚠️ Seu espaço de arquivos ainda não foi inicializado. Entre em contato com o suporte.")
-        else:
-            # Se não tiver o prefixo, adicionamos na chamada (ou deixamos o manager lidar)
-            # Mas para a UI, consideramos 'inicializado' se tiver algum ID.
-            pass
+        # Validar se é store real (Enterprise) ou dummy
+        is_dummy = c_store_id and "store_" in c_store_id and "fileSearchStores" not in c_store_id
+        
+        if not c_store_id or is_dummy:
+            st.warning("⚠️ Seu espaço de arquivos ainda não foi inicializado corretamente no Gemini.")
+            if st.button("🚀 Inicializar Espaço agora"):
+                with st.spinner("Criando Vector Store no Google..."):
+                    vs, err = gemini_manager.get_or_create_vector_store(user_data['name'])
+                    if vs:
+                        try:
+                            with get_connection() as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute("UPDATE clients SET gemini_store_id = %s WHERE id = %s", (vs.name, user_data['id']))
+                            user_data['store_id'] = vs.name
+                            st.success(f"Espaço criado! ID: {vs.name}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao salvar BD: {e}")
+                    else:
+                        st.error(f"Erro ao criar no Gemini: {err}")
+        
+        # Só mostra upload se tiver algo (mesmo que dummy, para não quebrar layout, mas o aviso acima orienta a correção)
+        if c_store_id:
             # UPLOAD
             uploaded_files = st.file_uploader("Enviar PDFs, CSV, TXT", accept_multiple_files=True)
             if st.button("📤 Enviar para IA"):
@@ -208,9 +225,13 @@ def render_client_view(user_data):
 
             status_data = {}
             try:
+                # Debug Info: Mostra URL mascarada
+                # st.write(f"Connecting to: {api_url}")
                 status_data = asyncio.run(get_instance_status(api_key=api_key, base_url=api_url))
             except Exception as e:
-                st.error(f"Erro ao checar status: {e}")
+                st.error(f"Erro ao conectar na API Uazapi: {e}")
+                st.caption(f"URL: {api_url}")
+                st.info("Dica: Verifique se o container Uazapi está rodando e se as variáveis de ambiente (UAZAPI_URL) estão corretas.")
 
             state = status_data.get("instance", {}).get("state", "unknown")
             st.metric("Status da Instância", state.upper(), delta="🟢 Online" if state=="open" else "🔴 Offline")
