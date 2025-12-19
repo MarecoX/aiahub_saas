@@ -220,8 +220,40 @@ def render_client_view(user_data):
         api_url = w_config.get('url', os.getenv("UAZAPI_URL"))
         api_key = w_config.get('key', os.getenv("UAZAPI_KEY"))
         
+        # Se não tiver URL/Key, permite configurar na hora
         if not api_url or not api_key:
-            st.error("⚠️ URL ou Chave da API WhatsApp não configuradas. Verifique as variáveis de ambiente.")
+            st.warning("⚠️ Configuração do WhatsApp não detectada.")
+            st.info("Preencha os dados da sua instância Uazapi/Evolution abaixo:")
+            
+            with st.form("config_whatsapp_form"):
+                new_url = st.text_input("URL da API (ex: https://api.z-api.io...)", value=api_url or "")
+                new_key = st.text_input("Global API Key / Token", value=api_key or "", type="password")
+                
+                if st.form_submit_button("💾 Salvar Configuração"):
+                    try:
+                        # Atualiza tools_config no banco
+                        current_tools = user_data.get('tools_config', {}) or {}
+                        # Garante que é dict
+                        if isinstance(current_tools, str):
+                            import json
+                            current_tools = json.loads(current_tools)
+                            
+                        current_tools['whatsapp'] = {
+                            "url": new_url,
+                            "key": new_key
+                        }
+                        
+                        import json
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("UPDATE clients SET tools_config = %s WHERE id = %s", (json.dumps(current_tools), user_data['id']))
+                        
+                        # Atualiza memória e recarrega
+                        user_data['tools_config'] = current_tools
+                        st.success("Configuração salva! Recarregando...")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
         else:
             if st.button("🔄 Atualizar Status"):
                 st.rerun()
