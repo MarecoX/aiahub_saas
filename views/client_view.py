@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import sys
 import asyncio
+import uuid
 
 # Adiciona diretório raiz ao path para imports funcionarem
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -55,15 +56,16 @@ def render_client_view(user_data):
                         st.error(f"Erro ao criar no Gemini: {err}")
         
         # Só mostra upload se tiver algo (mesmo que dummy, para não quebrar layout, mas o aviso acima orienta a correção)
-        if c_store_id:
             # UPLOAD
             uploaded_files = st.file_uploader("Enviar PDFs, CSV, TXT", accept_multiple_files=True)
             if st.button("📤 Enviar para IA"):
                 if uploaded_files:
                     bar = st.progress(0)
                     for i, file in enumerate(uploaded_files):
-                        # Save temp
-                        tpath = f"temp_{file.name}"
+                        # Save temp with SAFE ASCII NAME using UUID
+                        ext = os.path.splitext(file.name)[1]
+                        tpath = f"temp_{uuid.uuid4().hex}{ext}"
+                        
                         with open(tpath, "wb") as f: f.write(file.getbuffer())
                         
                         st.write(f"Enviando {file.name}...")
