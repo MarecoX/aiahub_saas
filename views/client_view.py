@@ -150,35 +150,62 @@ def render_client_view(user_data):
         st.header("⏰ Follow-up Automático")
         st.info("Configure mensagens automáticas para enviar quando o cliente para de responder.")
         
-        # Load Config
+        # Load Config from User Data (Initial Load)
         f_config = user_data.get('followup_config', {})
-        if not f_config: f_config = {} # Safety check
+        if not f_config: f_config = {}
         
-        # UI State for editing
-        # Use session state to allow dynamic add/remove without saving immediately?
-        # Simpler: Edit directly into a local var and Save overwrites DB.
+        # --- STATE MANAGEMENT ---
+        # Initialize session state for editing if not present or if user changed
+        # We use a specific key to track which client's config is loaded
+        state_key = f"followup_stages_{user_data['id']}"
         
-        active = st.toggle("Ativar Follow-up Automático", value=f_config.get('active', False))
+        if state_key not in st.session_state:
+            # Deep copy to avoid reference issues
+            import copy
+            initial_stages = copy.deepcopy(f_config.get('stages', []))
+            st.session_state[state_key] = initial_stages
+            st.session_state[f"active_{user_data['id']}"] = f_config.get('active', False)
+            
+        # Bind controls to session state
+        active = st.toggle("Ativar Follow-up Automático", key=f"active_{user_data['id']}")
         
-        stages = f_config.get('stages', [])
+        current_stages = st.session_state[state_key]
         
-        st.subheader(f"Etapas de Retomada ({len(stages)})")
+        st.subheader(f"Etapas de Retomada ({len(current_stages)})")
         
-        # Display Stages
-        new_stages = []
-        for i, stage in enumerate(stages):
+        # Display Stages (Iterate over the SESSION STATE list)
+        indices_to_remove = []
+        
+        for i, stage in enumerate(current_stages):
             with st.expander(f"Etapa {i+1}", expanded=True):
                 c1, c2 = st.columns([2, 1])
-                delay = c1.number_input(f"Esperar (minutos) - Etapa {i+1}", min_value=1, value=int(stage.get('delay_minutes', 60)), key=f"d_{i}")
-                prompt = st.text_area(f"Instrução para IA - Etapa {i+1}", value=stage.get('prompt', "Pergunte se precisa de ajuda."), key=f"p_{i}", help="Ex: 'Seja educado e pergunte se a dúvida foi sanada.'")
                 
-                if st.button("🗑️ Remover Etapa", key=f"rem_{i}"):
-                    continue # Skip adding to new_stages (delete)
+                # Update values directly in the list
+                stage['delay_minutes'] = c1.number_input(
+                    f"Esperar (minutos)", 
+                    min_value=1, 
+                    value=int(stage.get('delay_minutes', 60)), 
+                    key=f"d_{user_data['id']}_{i}"
+                )
                 
-                new_stages.append({"delay_minutes": delay, "prompt": prompt})
+                stage['prompt'] = st.text_area(
+                    f"Instrução para IA", 
+                    value=stage.get('prompt', "Pergunte se precisa de ajuda."), 
+                    key=f"p_{user_data['id']}_{i}",
+                    help="Ex: 'Seja educado e pergunte se a dúvida foi sanada.'"
+                )
+                
+                if st.button("🗑️ Remover Etapa", key=f"rem_{user_data['id']}_{i}"):
+                    indices_to_remove.append(i)
+
+        # Apply Removals
+        if indices_to_remove:
+            for index in sorted(indices_to_remove, reverse=True):
+                del st.session_state[state_key][index]
+            st.rerun()
 
         if st.button("➕ Adicionar Nova Etapa"):
-            new_stages.append({"delay_minutes": 60, "prompt": "Olá, ainda está por aqui?"})
+            st.session_state[state_key].append({"delay_minutes": 60, "prompt": "Olá, ainda está por aqui?"})
             st.rerun()
 
         # Save Logic
@@ -186,7 +213,7 @@ def render_client_view(user_data):
         if st.button("💾 Salvar Configuração de Follow-up", type="primary"):
             final_config = {
                 "active": active,
-                "stages": new_stages
+                "stages": st.session_state[state_key]
             }
             try:
                 import json
@@ -194,10 +221,11 @@ def render_client_view(user_data):
                     with conn.cursor() as cur:
                          cur.execute("UPDATE clients SET followup_config = %s WHERE id = %s", (json.dumps(final_config), user_data['id']))
                 
-                # Update local session
+                # Update local session IS CRITICAL so validade checks pass or other tabs see it
                 user_data['followup_config'] = final_config
+                
+                # Force update of the session state key to match what we just saved (sync)
                 st.success("✅ Configuração salva com sucesso!")
                 st.balloons()
-                # st.rerun() # Opcional
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
