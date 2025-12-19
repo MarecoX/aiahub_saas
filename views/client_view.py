@@ -282,8 +282,17 @@ def render_client_view(user_data):
                     with st.spinner("Solicitando conexão..."):
                         try:
                             resp = asyncio.run(connect_instance(phone=phone_num if phone_num else None, api_key=api_key, base_url=api_url))
-                            if "base64" in resp:
-                                st.image(resp["base64"], caption="Escaneie o QR Code", width=300)
+                            
+                            # Tenta extrair QR Code de vários locais possíveis
+                            qr_code_data = (
+                                resp.get("base64") or 
+                                resp.get("qrcode") or 
+                                resp.get("instance", {}).get("qrcode")
+                            )
+                            
+                            if qr_code_data:
+                                # Se vier com prefixo data URI, o st.image renderiza
+                                st.image(qr_code_data, caption="Escaneie o QR Code", width=300)
                             elif "code" in resp:
                                 st.success(f"Código de Pareamento: {resp['code']}")
                                 st.title(resp['code'])
