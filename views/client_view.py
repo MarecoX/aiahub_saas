@@ -283,9 +283,11 @@ def render_client_view(user_data):
             if state != "open":
                 st.divider()
                 st.subheader("Nova Conexão")
-                phone_num = st.text_input("Número (com DDD e DDI, ex: 5511999999999)", help="Deixe vazio para gerar QR Code, ou preencha para gerar Código de Pareamento.")
+                phone_num = st.text_input("Número (Opcional - Apenas para Código de Pareamento)", help="Deixe vazio para gerar QR Code.")
                 
-                if st.button("🔗 Conectar"):
+                st.caption("ℹ️ Para ver o **QR Code**, clique no botão abaixo sem preencher o número.")
+                
+                if st.button("🔗 Gerar QR Code / Conectar"):
                     with st.spinner("Solicitando conexão..."):
                         try:
                             resp = asyncio.run(connect_instance(phone=phone_num if phone_num else None, api_key=api_key, base_url=api_url))
