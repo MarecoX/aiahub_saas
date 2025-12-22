@@ -332,6 +332,23 @@ def render_client_view(user_data):
                     help="Use a busca acima para preencher.",
                 )
 
+            if c_lp_active:
+                st.markdown("#### 🔗 Webhook de Integração")
+                st.info(
+                    "Copie a URL abaixo e configure no LancePilot (Settings > Webhook):"
+                )
+
+                # Tenta adivinhar a URL base (ou usa placeholder)
+                base_kestra = user_data.get("api_url") or "https://SEU-KESTRA-URL.com"
+                if "/api" in base_kestra:
+                    base_kestra = base_kestra.split("/api")[0]
+
+                # URL do Webhook do Flow 'lancepilot_native'
+                webhook_url = f"{base_kestra}/api/v1/executions/webhook/company.team/lancepilot_native/lp_webhook?token={user_data.get('token')}"
+
+                st.code(webhook_url, language="text")
+                st.caption(f"Token do Cliente: {user_data.get('token')}")
+
         st.divider()
         if st.button("💾 Salvar Integrações"):
             new_tools_config = t_config.copy()
