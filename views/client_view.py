@@ -13,11 +13,12 @@ if root_dir not in sys.path:
 from scripts import gemini_manager
 from scripts.saas_db import get_connection
 
+
 def render_client_view(user_data):
     # user_data = {'id', 'name', 'store_id', 'system_prompt', ...}
-    
+
     st.title(f"🤖 Kestra AI | {user_data['name']}")
-    
+
     col_info, col_logout = st.columns([4, 1])
     with col_info:
         st.caption(f"Knowledge Base ID: {user_data.get('store_id', 'Não configurado')}")
@@ -27,38 +28,60 @@ def render_client_view(user_data):
             st.rerun()
 
     # --- TABS ---
-    tab_files, tab_prompt, tab_sim, tab_tools, tab_whatsapp, tab_followup = st.tabs(["📂 Meus Arquivos (RAG)", "🧠 Personalidade (Prompt)", "💬 Testar Assistente", "🔗 Integrações e Ferramentas", "📱 Conexão WhatsApp", "⏰ Follow-up Autônomo"])
+    tab_files, tab_prompt, tab_sim, tab_tools, tab_whatsapp, tab_followup = st.tabs(
+        [
+            "📂 Meus Arquivos (RAG)",
+            "🧠 Personalidade (Prompt)",
+            "💬 Testar Assistente",
+            "🔗 Integrações e Ferramentas",
+            "📱 Conexão WhatsApp",
+            "⏰ Follow-up Autônomo",
+        ]
+    )
 
     # --- TAB 1: ARQUIVOS (RAG) ---
     with tab_files:
         st.header("Gerenciar Conhecimento")
-        c_store_id = user_data.get('store_id')
-        
+        c_store_id = user_data.get("store_id")
+
         # Validar se é store real (Enterprise) ou dummy
-        is_dummy = c_store_id and "store_" in c_store_id and "fileSearchStores" not in c_store_id
-        
+        is_dummy = (
+            c_store_id
+            and "store_" in c_store_id
+            and "fileSearchStores" not in c_store_id
+        )
+
         if not c_store_id or is_dummy:
-            st.warning("⚠️ Seu espaço de arquivos ainda não foi inicializado corretamente no Gemini.")
+            st.warning(
+                "⚠️ Seu espaço de arquivos ainda não foi inicializado corretamente no Gemini."
+            )
             if st.button("🚀 Inicializar Espaço agora"):
                 with st.spinner("Criando Vector Store no Google..."):
-                    vs, err = gemini_manager.get_or_create_vector_store(user_data['name'])
+                    vs, err = gemini_manager.get_or_create_vector_store(
+                        user_data["name"]
+                    )
                     if vs:
                         try:
                             with get_connection() as conn:
                                 with conn.cursor() as cur:
-                                    cur.execute("UPDATE clients SET gemini_store_id = %s WHERE id = %s", (vs.name, user_data['id']))
-                            user_data['store_id'] = vs.name
+                                    cur.execute(
+                                        "UPDATE clients SET gemini_store_id = %s WHERE id = %s",
+                                        (vs.name, user_data["id"]),
+                                    )
+                            user_data["store_id"] = vs.name
                             st.success(f"Espaço criado! ID: {vs.name}")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao salvar BD: {e}")
                     else:
                         st.error(f"Erro ao criar no Gemini: {err}")
-        
+
         # Só mostra upload se tiver algo (após validação acima)
         if c_store_id:
             # UPLOAD
-            uploaded_files = st.file_uploader("Enviar PDFs, CSV, TXT", accept_multiple_files=True)
+            uploaded_files = st.file_uploader(
+                "Enviar PDFs, CSV, TXT", accept_multiple_files=True
+            )
             if st.button("📤 Enviar para IA"):
                 if uploaded_files:
                     bar = st.progress(0)
@@ -66,21 +89,27 @@ def render_client_view(user_data):
                         # Save temp with SAFE ASCII NAME using UUID
                         ext = os.path.splitext(file.name)[1]
                         tpath = f"temp_{uuid.uuid4().hex}{ext}"
-                        
-                        with open(tpath, "wb") as f: f.write(file.getbuffer())
-                        
+
+                        with open(tpath, "wb") as f:
+                            f.write(file.getbuffer())
+
                         st.write(f"Enviando {file.name}...")
                         # Upload usando Manager
-                        op, err = gemini_manager.upload_file_to_store(tpath, c_store_id, custom_display_name=file.name)
-                        
-                        if op: st.success(f"✅ {file.name} ok!")
-                        else: st.error(f"Erro {file.name}: {err}")
-                        
-                        if os.path.exists(tpath): os.remove(tpath)
-                        bar.progress((i+1)/len(uploaded_files))
-            
+                        op, err = gemini_manager.upload_file_to_store(
+                            tpath, c_store_id, custom_display_name=file.name
+                        )
+
+                        if op:
+                            st.success(f"✅ {file.name} ok!")
+                        else:
+                            st.error(f"Erro {file.name}: {err}")
+
+                        if os.path.exists(tpath):
+                            os.remove(tpath)
+                        bar.progress((i + 1) / len(uploaded_files))
+
             st.divider()
-            
+
             # LISTAGEM
             st.subheader("Arquivos Ativos")
             files = gemini_manager.list_files_in_store(c_store_id)
@@ -95,7 +124,7 @@ def render_client_view(user_data):
                     if st.button("🗑️", key=f"del_{f.name}"):
                         gemini_manager.delete_file(f.name)
                         st.rerun()
-            
+
             if not found:
                 st.info("Nenhum arquivo na base.")
 
@@ -103,20 +132,25 @@ def render_client_view(user_data):
     with tab_prompt:
         st.header("Personalidade do Robô")
         st.info("Defina como seu assistente deve se comportar.")
-        
+
         # Carrega prompt atual do banco (reload fresco)
-        current_prompt = user_data['system_prompt']
-        
-        typed_prompt = st.text_area("System Prompt", value=current_prompt, height=300, key="sys_prompt_area")
-        
+        current_prompt = user_data["system_prompt"]
+
+        typed_prompt = st.text_area(
+            "System Prompt", value=current_prompt, height=300, key="sys_prompt_area"
+        )
+
         if st.button("💾 Salvar Personalidade"):
             try:
                 with get_connection() as conn:
                     with conn.cursor() as cur:
-                         cur.execute("UPDATE clients SET system_prompt = %s WHERE id = %s", (typed_prompt, user_data['id']))
+                        cur.execute(
+                            "UPDATE clients SET system_prompt = %s WHERE id = %s",
+                            (typed_prompt, user_data["id"]),
+                        )
                 st.success("Prompt atualizado com sucesso!")
                 # Atualiza session state visualmente
-                user_data['system_prompt'] = typed_prompt
+                user_data["system_prompt"] = typed_prompt
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
 
@@ -124,7 +158,7 @@ def render_client_view(user_data):
     with tab_sim:
         st.header("Simulador de Chat")
         st.caption("Teste as respostas do seu bot usando a base de conhecimento acima.")
-        
+
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
@@ -137,28 +171,32 @@ def render_client_view(user_data):
             st.session_state.messages.append({"role": "user", "content": prompt_text})
             with st.chat_message("user"):
                 st.markdown(prompt_text)
-            
+
             # Generate Answer
             with st.chat_message("assistant"):
                 with st.spinner("Pensando..."):
                     # Importa Ask SaaS
                     try:
                         from scripts.chains_saas import ask_saas
-                        
+
                         # Mock Config
-                        mock_config = {"gemini_store_id": user_data['store_id']}
-                        
+                        mock_config = {"gemini_store_id": user_data["store_id"]}
+
                         # Loop assincrono pra rodar ask_saas
-                        response = asyncio.run(ask_saas(
-                            query=prompt_text,
-                            chat_id=f"SIM_{user_data['id']}",
-                            system_prompt=user_data['system_prompt'],
-                            client_config=mock_config
-                        ))
-                        
+                        response = asyncio.run(
+                            ask_saas(
+                                query=prompt_text,
+                                chat_id=f"SIM_{user_data['id']}",
+                                system_prompt=user_data["system_prompt"],
+                                client_config=mock_config,
+                            )
+                        )
+
                         st.markdown(response)
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": response}
+                        )
+
                     except Exception as e:
                         st.error(f"Erro no Simulador: {e}")
 
@@ -166,45 +204,162 @@ def render_client_view(user_data):
     with tab_tools:
         st.header("Ferramentas e Integrações")
         st.info("Conecte seu assistente a sistemas externos.")
-        
+
         # Load Config
-        t_config = user_data.get('tools_config', {})
-        if not t_config: t_config = {}
-        
+        t_config = user_data.get("tools_config", {})
+        if not t_config:
+            t_config = {}
+
         # --- Kommo CRM ---
         st.subheader("Kommo CRM")
-        kommo_cfg = t_config.get('qualificado_kommo_provedor', {})
-        if isinstance(kommo_cfg, bool): kommo_cfg = {"active": kommo_cfg}
-        
-        c_kommo_active = st.toggle("Ativar Integração Kommo CRM", value=kommo_cfg.get('active', False))
-        
+        kommo_cfg = t_config.get("qualificado_kommo_provedor", {})
+        if isinstance(kommo_cfg, bool):
+            kommo_cfg = {"active": kommo_cfg}
+
+        c_kommo_active = st.toggle(
+            "Ativar Integração Kommo CRM", value=kommo_cfg.get("active", False)
+        )
+
         if c_kommo_active:
             k1, k2 = st.columns(2)
-            k_url = k1.text_input("URL Base (ex: https://dominio.kommo.com)", value=kommo_cfg.get('url', ''))
-            k_token = k2.text_input("Token de Autorização (Bearer ...)", value=kommo_cfg.get('token', ''), type="password")
-            
+            k_url = k1.text_input(
+                "URL Base (ex: https://dominio.kommo.com)",
+                value=kommo_cfg.get("url", ""),
+            )
+            k_token = k2.text_input(
+                "Token de Autorização (Bearer ...)",
+                value=kommo_cfg.get("token", ""),
+                type="password",
+            )
+
             k3, k4 = st.columns(2)
-            k_pipeline = k3.text_input("Pipeline ID (Opcional)", value=str(kommo_cfg.get('pipeline_id', '')))
-            k_status = k4.text_input("Status ID (Lead Qualificado)", value=str(kommo_cfg.get('status_id', '')))
-            
-            st.caption("Ao preencher o Status ID, o assistente moverá o card automaticamente quando qualificado.")
+            k_pipeline = k3.text_input(
+                "Pipeline ID (Opcional)", value=str(kommo_cfg.get("pipeline_id", ""))
+            )
+            k_status = k4.text_input(
+                "Status ID (Lead Qualificado)",
+                value=str(kommo_cfg.get("status_id", "")),
+            )
+
+            st.caption(
+                "Ao preencher o Status ID, o assistente moverá o card automaticamente quando qualificado."
+            )
+
+        st.divider()
+
+        # --- LancePilot ---
+        st.subheader("LancePilot (WhatsApp Oficial)")
+        lp_cfg = t_config.get("lancepilot", {})
+        if isinstance(lp_cfg, bool):
+            lp_cfg = {"active": lp_cfg}
+
+        c_lp_active = st.toggle(
+            "Ativar Integração LancePilot", value=lp_cfg.get("active", False)
+        )
+
+        lp_token = lp_cfg.get("token", "")
+        lp_workspace_id = lp_cfg.get("workspace_id", "")
+
+        if c_lp_active:
+            lp_token = st.text_input(
+                "Token LancePilot (API v3)", value=lp_token, type="password"
+            )
+
+            # Privacy: Search Term Required
+            lp_search = st.text_input(
+                "Nome do Workspace (Filtro Obrigatório)",
+                help="Digite o nome exato para buscar seu workspace.",
+            )
+
+            # Fetch Workspaces Button
+            workspaces = []
+            if lp_token:
+                if st.button("🔄 Carregar Workspaces"):
+                    if not lp_search:
+                        st.warning("⚠️ Digite o nome do Workspace para buscar.")
+                    else:
+                        try:
+                            # Lazy import to avoid circular dependency
+                            try:
+                                from scripts.lancepilot_client import LancePilotClient
+                            except ImportError:
+                                import sys
+
+                                sys.path.append(
+                                    os.path.abspath(
+                                        os.path.join(os.path.dirname(__file__), "..")
+                                    )
+                                )
+                                from scripts.lancepilot_client import LancePilotClient
+
+                            client = LancePilotClient(token=lp_token)
+                            # Pass search term!
+                            data = client.get_workspaces(search_query=lp_search)
+                            st.session_state[f"lp_workspaces_{user_data['id']}"] = data
+                            if data:
+                                st.success(f"Encontrado: {len(data)} workspace(s).")
+                            else:
+                                st.warning("Nenhum workspace encontrado com este nome.")
+                        except Exception as e:
+                            st.error(f"Erro ao buscar workspaces: {e}")
+
+            # Dropdown for Workspace
+            saved_ws_list = st.session_state.get(f"lp_workspaces_{user_data['id']}", [])
+
+            if saved_ws_list:
+                ws_options = {
+                    w["id"]: f"{w['attributes']['name']} ({w['id']})"
+                    for w in saved_ws_list
+                }
+
+                # Default index
+                def_idx = 0
+                keys = list(ws_options.keys())
+                if lp_workspace_id in keys:
+                    def_idx = keys.index(lp_workspace_id)
+
+                selected_ws = st.selectbox(
+                    "Selecione o Workspace",
+                    options=keys,
+                    format_func=lambda x: ws_options[x],
+                    index=def_idx,
+                )
+                lp_workspace_id = selected_ws
+            else:
+                lp_workspace_id = st.text_input(
+                    "ID do Workspace",
+                    value=lp_workspace_id,
+                    help="Use a busca acima para preencher.",
+                )
 
         st.divider()
         if st.button("💾 Salvar Integrações"):
             new_tools_config = t_config.copy()
-            new_tools_config['qualificado_kommo_provedor'] = {
+            # Save Kommo
+            new_tools_config["qualificado_kommo_provedor"] = {
                 "active": c_kommo_active,
                 "url": k_url if c_kommo_active else "",
                 "token": k_token if c_kommo_active else "",
                 "pipeline_id": k_pipeline if c_kommo_active else "",
-                "status_id": k_status if c_kommo_active else ""
+                "status_id": k_status if c_kommo_active else "",
             }
+            # Save LancePilot
+            new_tools_config["lancepilot"] = {
+                "active": c_lp_active,
+                "token": lp_token if c_lp_active else "",
+                "workspace_id": lp_workspace_id if c_lp_active else "",
+            }
+
             try:
                 import json
+
                 with get_connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE clients SET tools_config = %s WHERE id = %s", (json.dumps(new_tools_config), user_data['id']))
-                user_data['tools_config'] = new_tools_config
+                        cur.execute(
+                            "UPDATE clients SET tools_config = %s WHERE id = %s",
+                            (json.dumps(new_tools_config), user_data["id"]),
+                        )
+                user_data["tools_config"] = new_tools_config
                 st.success("Configurações salvas!")
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
@@ -213,45 +368,59 @@ def render_client_view(user_data):
     with tab_whatsapp:
         st.header("Conexão WhatsApp")
         st.caption("Gerencie a conexão da sua instância com o WhatsApp.")
-        
-        from scripts.uazapi_saas import get_instance_status, connect_instance, disconnect_instance
-        
-        w_config = user_data.get('tools_config', {}).get('whatsapp', {})
-        
+
+        from scripts.uazapi_saas import (
+            get_instance_status,
+            connect_instance,
+            disconnect_instance,
+        )
+
+        w_config = user_data.get("tools_config", {}).get("whatsapp", {})
+
         # Ordem de prioridade (Client DB > Tools Config > Env Var)
-        api_url = user_data.get('api_url') or w_config.get('url') or os.getenv("UAZAPI_URL")
-        api_key = user_data.get('token') or w_config.get('key') or os.getenv("UAZAPI_KEY")
-        
+        api_url = (
+            user_data.get("api_url") or w_config.get("url") or os.getenv("UAZAPI_URL")
+        )
+        api_key = (
+            user_data.get("token") or w_config.get("key") or os.getenv("UAZAPI_KEY")
+        )
+
         # Se não tiver URL/Key, permite configurar na hora
         if not api_url or not api_key:
             st.warning("⚠️ Configuração do WhatsApp não detectada.")
             st.info("Preencha os dados da sua instância Uazapi/Evolution abaixo:")
-            
+
             with st.form("config_whatsapp_form"):
-                new_url = st.text_input("URL da API (ex: https://api.z-api.io...)", value=api_url or "")
-                new_key = st.text_input("Global API Key / Token", value=api_key or "", type="password")
-                
+                new_url = st.text_input(
+                    "URL da API (ex: https://api.z-api.io...)", value=api_url or ""
+                )
+                new_key = st.text_input(
+                    "Global API Key / Token", value=api_key or "", type="password"
+                )
+
                 if st.form_submit_button("💾 Salvar Configuração"):
                     try:
                         # Atualiza tools_config no banco
-                        current_tools = user_data.get('tools_config', {}) or {}
+                        current_tools = user_data.get("tools_config", {}) or {}
                         # Garante que é dict
                         if isinstance(current_tools, str):
                             import json
+
                             current_tools = json.loads(current_tools)
-                            
-                        current_tools['whatsapp'] = {
-                            "url": new_url,
-                            "key": new_key
-                        }
-                        
+
+                        current_tools["whatsapp"] = {"url": new_url, "key": new_key}
+
                         import json
+
                         with get_connection() as conn:
                             with conn.cursor() as cur:
-                                cur.execute("UPDATE clients SET tools_config = %s WHERE id = %s", (json.dumps(current_tools), user_data['id']))
-                        
+                                cur.execute(
+                                    "UPDATE clients SET tools_config = %s WHERE id = %s",
+                                    (json.dumps(current_tools), user_data["id"]),
+                                )
+
                         # Atualiza memória e recarrega
-                        user_data['tools_config'] = current_tools
+                        user_data["tools_config"] = current_tools
                         st.success("Configuração salva! Recarregando...")
                         st.rerun()
                     except Exception as e:
@@ -264,11 +433,15 @@ def render_client_view(user_data):
             try:
                 # Debug Info: Mostra URL mascarada
                 # st.write(f"Connecting to: {api_url}")
-                status_data = asyncio.run(get_instance_status(api_key=api_key, base_url=api_url))
+                status_data = asyncio.run(
+                    get_instance_status(api_key=api_key, base_url=api_url)
+                )
             except Exception as e:
                 st.error(f"Erro ao conectar na API Uazapi: {e}")
                 st.caption(f"URL: {api_url}")
-                st.info("Dica: Verifique se o container Uazapi está rodando e se as variáveis de ambiente (UAZAPI_URL) estão corretas.")
+                st.info(
+                    "Dica: Verifique se o container Uazapi está rodando e se as variáveis de ambiente (UAZAPI_URL) estão corretas."
+                )
 
             if "error" in status_data:
                 st.error(f"Erro na API: {status_data['error']}")
@@ -276,52 +449,77 @@ def render_client_view(user_data):
 
             instance_data = status_data.get("instance", {})
             # API pode retornar 'state' ou 'status' dependendo da versão
-            state = instance_data.get("state") or instance_data.get("status") or "unknown"
-            
-            st.metric("Status da Instância", state.upper(), delta="🟢 Online" if state=="open" else "🔴 Offline")
+            state = (
+                instance_data.get("state") or instance_data.get("status") or "unknown"
+            )
+
+            st.metric(
+                "Status da Instância",
+                state.upper(),
+                delta="🟢 Online" if state == "open" else "🔴 Offline",
+            )
 
             if state != "open":
                 st.divider()
                 st.subheader("Nova Conexão")
-                phone_num = st.text_input("Número (Opcional - Apenas para Código de Pareamento)", help="Deixe vazio para gerar QR Code.")
-                
-                st.caption("ℹ️ Para ver o **QR Code**, clique no botão abaixo sem preencher o número.")
-                
+                phone_num = st.text_input(
+                    "Número (Opcional - Apenas para Código de Pareamento)",
+                    help="Deixe vazio para gerar QR Code.",
+                )
+
+                st.caption(
+                    "ℹ️ Para ver o **QR Code**, clique no botão abaixo sem preencher o número."
+                )
+
                 if st.button("🔗 Gerar QR Code / Conectar"):
                     with st.spinner("Solicitando conexão..."):
                         try:
-                            resp = asyncio.run(connect_instance(phone=phone_num if phone_num else None, api_key=api_key, base_url=api_url))
-                            
+                            resp = asyncio.run(
+                                connect_instance(
+                                    phone=phone_num if phone_num else None,
+                                    api_key=api_key,
+                                    base_url=api_url,
+                                )
+                            )
+
                             # DEBUG: Mostra o JSON cru para entendermos o que está voltando
                             st.write("Resposta da API (Debug):")
                             st.json(resp)
-                            
+
                             # Tenta extrair QR Code de vários locais possíveis
-                            
+
                             # Tenta extrair QR Code de vários locais possíveis
                             qr_code_data = (
-                                resp.get("base64") or 
-                                resp.get("qrcode") or 
-                                resp.get("instance", {}).get("qrcode")
+                                resp.get("base64")
+                                or resp.get("qrcode")
+                                or resp.get("instance", {}).get("qrcode")
                             )
-                            
+
                             if qr_code_data:
                                 # Se vier com prefixo data URI, o st.image renderiza
-                                st.image(qr_code_data, caption="Escaneie o QR Code", width=300)
+                                st.image(
+                                    qr_code_data,
+                                    caption="Escaneie o QR Code",
+                                    width=300,
+                                )
                             elif "code" in resp:
                                 st.success(f"Código de Pareamento: {resp['code']}")
-                                st.title(resp['code'])
-                                st.info("Digite este código no seu WhatsApp > Aparelhos Conectados > Conectar com número.")
+                                st.title(resp["code"])
+                                st.info(
+                                    "Digite este código no seu WhatsApp > Aparelhos Conectados > Conectar com número."
+                                )
                             else:
                                 st.json(resp)
                         except Exception as e:
                             st.error(f"Erro ao conectar: {e}")
-            
+
             if state == "open" or state == "connecting":
                 st.divider()
                 if st.button("🚪 Desconectar", type="primary"):
                     try:
-                        asyncio.run(disconnect_instance(api_key=api_key, base_url=api_url))
+                        asyncio.run(
+                            disconnect_instance(api_key=api_key, base_url=api_url)
+                        )
                         st.success("Comando de logout enviado.")
                         st.rerun()
                     except Exception as e:
@@ -330,28 +528,45 @@ def render_client_view(user_data):
     # --- TAB 6: FOLLOW-UP ---
     with tab_followup:
         st.header("⏰ Follow-up Automático")
-        st.info("Configure mensagens automáticas para enviar quando o cliente para de responder.")
-        
-        f_config = user_data.get('followup_config', {})
-        if not f_config: f_config = {}
-        
+        st.info(
+            "Configure mensagens automáticas para enviar quando o cliente para de responder."
+        )
+
+        f_config = user_data.get("followup_config", {})
+        if not f_config:
+            f_config = {}
+
         state_key = f"followup_stages_{user_data['id']}"
         if state_key not in st.session_state:
             import copy
-            st.session_state[state_key] = copy.deepcopy(f_config.get('stages', []))
-            st.session_state[f"active_{user_data['id']}"] = f_config.get('active', False)
-            
-        active = st.toggle("Ativar Follow-up Automático", key=f"active_{user_data['id']}")
+
+            st.session_state[state_key] = copy.deepcopy(f_config.get("stages", []))
+            st.session_state[f"active_{user_data['id']}"] = f_config.get(
+                "active", False
+            )
+
+        active = st.toggle(
+            "Ativar Follow-up Automático", key=f"active_{user_data['id']}"
+        )
         current_stages = st.session_state[state_key]
-        
+
         st.subheader(f"Etapas de Retomada ({len(current_stages)})")
-        
+
         indices_to_remove = []
         for i, stage in enumerate(current_stages):
-            with st.expander(f"Etapa {i+1}", expanded=True):
+            with st.expander(f"Etapa {i + 1}", expanded=True):
                 c1, c2 = st.columns([2, 1])
-                stage['delay_minutes'] = c1.number_input(f"Esperar (minutos)", min_value=1, value=int(stage.get('delay_minutes', 60)), key=f"d_{user_data['id']}_{i}")
-                stage['prompt'] = st.text_area(f"Instrução para IA", value=stage.get('prompt', "Pergunte se precisa de ajuda."), key=f"p_{user_data['id']}_{i}")
+                stage["delay_minutes"] = c1.number_input(
+                    f"Esperar (minutos)",
+                    min_value=1,
+                    value=int(stage.get("delay_minutes", 60)),
+                    key=f"d_{user_data['id']}_{i}",
+                )
+                stage["prompt"] = st.text_area(
+                    f"Instrução para IA",
+                    value=stage.get("prompt", "Pergunte se precisa de ajuda."),
+                    key=f"p_{user_data['id']}_{i}",
+                )
                 if st.button("🗑️ Remover Etapa", key=f"rem_{user_data['id']}_{i}"):
                     indices_to_remove.append(i)
 
@@ -361,7 +576,9 @@ def render_client_view(user_data):
             st.rerun()
 
         if st.button("➕ Adicionar Nova Etapa"):
-            st.session_state[state_key].append({"delay_minutes": 60, "prompt": "Olá, ainda está por aqui?"})
+            st.session_state[state_key].append(
+                {"delay_minutes": 60, "prompt": "Olá, ainda está por aqui?"}
+            )
             st.rerun()
 
         st.divider()
@@ -369,10 +586,14 @@ def render_client_view(user_data):
             final_config = {"active": active, "stages": st.session_state[state_key]}
             try:
                 import json
+
                 with get_connection() as conn:
                     with conn.cursor() as cur:
-                         cur.execute("UPDATE clients SET followup_config = %s WHERE id = %s", (json.dumps(final_config), user_data['id']))
-                user_data['followup_config'] = final_config
+                        cur.execute(
+                            "UPDATE clients SET followup_config = %s WHERE id = %s",
+                            (json.dumps(final_config), user_data["id"]),
+                        )
+                user_data["followup_config"] = final_config
                 st.success("✅ Configuração salva com sucesso!")
                 st.balloons()
             except Exception as e:
