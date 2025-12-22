@@ -259,10 +259,17 @@ def render_client_view(user_data):
 
         lp_token = lp_cfg.get("token", "")
         lp_workspace_id = lp_cfg.get("workspace_id", "")
+        lp_number = lp_cfg.get("number", "")
 
         if c_lp_active:
             lp_token = st.text_input(
                 "Token LancePilot (API v3)", value=lp_token, type="password"
+            )
+
+            lp_number = st.text_input(
+                "Número Conectado (Ex: 5561999999999)",
+                value=lp_number,
+                help="Este número será usado para identificar a origem das mensagens se o Webhook não tiver token.",
             )
 
             # Privacy: Search Term Required
@@ -344,10 +351,12 @@ def render_client_view(user_data):
                     base_kestra = base_kestra.split("/api")[0]
 
                 # URL do Webhook do Flow 'lancepilot_native'
-                webhook_url = f"{base_kestra}/api/v1/executions/webhook/company.team/lancepilot_native/lp_webhook?token={user_data.get('token')}"
+                webhook_url = f"{base_kestra}/api/v1/executions/webhook/company.team/lancepilot_native/lp_webhook"
 
                 st.code(webhook_url, language="text")
-                st.caption(f"Token do Cliente: {user_data.get('token')}")
+                st.caption(
+                    f"Token do Cliente: {user_data.get('token')} | Identificação via Número: {lp_number}"
+                )
 
         st.divider()
         if st.button("💾 Salvar Integrações"):
@@ -365,6 +374,7 @@ def render_client_view(user_data):
                 "active": c_lp_active,
                 "token": lp_token if c_lp_active else "",
                 "workspace_id": lp_workspace_id if c_lp_active else "",
+                "number": lp_number if c_lp_active else "",
             }
 
             try:
