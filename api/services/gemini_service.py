@@ -153,16 +153,58 @@ class GeminiService:
         """
         if not self.client:
             return False
+
+        logger.info(f"🗑️ Solicitando deleção: {file_name}")
+
+        # 1. Tenta Deletar Documento diretamente (método padrão)
         try:
-            logger.info(f"🗑️ Solicitando deleção: {file_name}")
-            # Tenta apagar o Documento do Store
             self.client.file_search_stores.documents.delete(name=file_name)
             logger.info(f"✅ Documento deletado do store: {file_name}")
             return True
         except Exception as e:
-            logger.error(f"❌ Erro delete document ({file_name}): {e}")
-            # Se falhar, poderia tentar deletar o File resource se tivéssemos o ID mapeado.
-            # Por enquanto, retornamos False.
+            logger.warning(
+                f"⚠️ Falha ao deletar Documento diretamente({file_name}): {e}"
+            )
+            # Se falhar com 400 NON-EMPTY, tentamos deletar o FILE de origem.
+
+        # 2. Fallback: Deletar via File Resource (buscando pelo display_name)
+        try:
+            # Primeiro, precisamos saber o display_name do documento
+            doc = self.client.file_search_stores.documents.get(name=file_name)
+            target_display_name = doc.display_name
+
+            if not target_display_name:
+                logger.error(
+                    "❌ Documento sem display_name, impossível localizar File correpondente."
+                )
+                return False
+
+            logger.info(f"🔍 Buscando File resource para: {target_display_name}")
+
+            # Lista todos os arquivos (limite 100 por precaução mas a API v2 pagina)
+            # Nota: Isso pode ser lento se tiver milhares de arquivos.
+            all_files = self.client.files.list(page_size=100)
+
+            file_to_delete = None
+            for f in all_files:
+                if f.display_name == target_display_name:
+                    file_to_delete = f
+                    break
+
+            if file_to_delete:
+                logger.info(
+                    f"✅ File encontrado: {file_to_delete.name} ({file_to_delete.display_name}). Deletando..."
+                )
+                self.client.files.delete(name=file_to_delete.name)
+                return True
+            else:
+                logger.error(
+                    f"❌ File original não encontrado para name={target_display_name}"
+                )
+                return False
+
+        except Exception as ex:
+            logger.error(f"❌ Erro fatal no fallback de deleção: {ex}")
             return False
 
 
