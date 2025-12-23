@@ -158,7 +158,10 @@ class GeminiService:
 
         try:
             # force=True permite deletar documentos que possuem chunks (non-empty)
-            self.client.file_search_stores.documents.delete(name=file_name, force=True)
+            # Python SDK provavelmente espera isso dentro de 'config'
+            self.client.file_search_stores.documents.delete(
+                name=file_name, config={"force": True}
+            )
             logger.info(f"✅ Documento deletado do store: {file_name}")
             return True
         except Exception as e:
