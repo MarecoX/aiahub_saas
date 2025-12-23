@@ -181,9 +181,8 @@ class GeminiService:
 
             logger.info(f"🔍 Buscando File resource para: {target_display_name}")
 
-            # Lista todos os arquivos (limite 100 por precaução mas a API v2 pagina)
-            # Nota: Isso pode ser lento se tiver milhares de arquivos.
-            all_files = self.client.files.list(page_size=100)
+            # Lista todos os arquivos (sem page_size explícito para evitar erro de assinatura)
+            all_files = self.client.files.list()
 
             file_to_delete = None
             for f in all_files:
