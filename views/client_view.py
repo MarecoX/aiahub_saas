@@ -10,7 +10,7 @@ root_dir = os.path.dirname(current_dir)
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-from scripts import gemini_manager
+from api.services.gemini_service import service as gemini_manager
 from scripts.saas_db import get_connection
 
 
