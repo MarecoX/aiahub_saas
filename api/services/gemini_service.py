@@ -182,13 +182,23 @@ class GeminiService:
             logger.info(f"🔍 Buscando File resource para: {target_display_name}")
 
             # Lista todos os arquivos (sem page_size explícito para evitar erro de assinatura)
-            all_files = self.client.files.list()
+            # Converte para lista para garantir que iteramos e podemos contar
+            all_files = list(self.client.files.list())
+            logger.info(f"🔎 Total de arquivos encontrados na conta: {len(all_files)}")
 
             file_to_delete = None
+            found_candidates = []
+
             for f in all_files:
+                # Log debug dos primeiros 5 ou se parecer
+                if len(found_candidates) < 5:
+                    found_candidates.append(f"{f.display_name} ({f.name})")
+
                 if f.display_name == target_display_name:
                     file_to_delete = f
                     break
+
+            logger.info(f"📝 Amostra de arquivos na conta: {found_candidates}")
 
             if file_to_delete:
                 logger.info(
@@ -198,7 +208,7 @@ class GeminiService:
                 return True
             else:
                 logger.error(
-                    f"❌ File original não encontrado para name={target_display_name}"
+                    f"❌ File original não encontrado para name='{target_display_name}'. Falha na correspondência exata."
                 )
                 return False
 
