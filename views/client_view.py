@@ -348,9 +348,9 @@ def render_client_view(user_data):
                 )
 
                 # Tenta adivinhar a URL base (ou usa placeholder)
-                base_Neozaper = user_data.get("api_url") or "https://SEU-KESTRA-URL.com"
+                base_kestra = user_data.get("api_url") or "https://SEU-KESTRA-URL.com"
                 if "/api" in base_kestra:
-                    base_Neozaper = base_kestra.split("/api")[0]
+                    base_kestra = base_kestra.split("/api")[0]
 
                 # URL do Webhook do Flow 'lancepilot_native'
                 webhook_url = f"{base_kestra}/api/v1/executions/webhook/company.team/lancepilot_native/lp_webhook"
@@ -627,4 +627,5 @@ def render_client_view(user_data):
                 st.balloons()
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
+
 
