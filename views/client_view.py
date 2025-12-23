@@ -5,7 +5,7 @@ import asyncio
 import uuid
 
 # Adiciona diretório raiz ao path para imports funcionarem
-current_dir = os.path.dirname(os.path.abspath(__file__)
+current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
@@ -19,7 +19,7 @@ from scripts.saas_db import get_connection
 def render_client_view(user_data):
     # user_data = {'id', 'name', 'store_id', 'system_prompt', ...}
 
-    st.title(f"🤖 Neozaper AI | {user_data['name']}")
+    st.title(f"🤖 Kestra AI | {user_data['name']}")
 
     col_info, col_logout = st.columns([4, 1])
     with col_info:
@@ -627,5 +627,3 @@ def render_client_view(user_data):
                 st.balloons()
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
-
-
