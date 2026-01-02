@@ -8,7 +8,7 @@ langchain-community
 langchain-text-splitters
 langgraph
 langgraph-checkpoint-postgres
-google-generativeai
+google-genai
 pypdf
 openai
 chromadb
