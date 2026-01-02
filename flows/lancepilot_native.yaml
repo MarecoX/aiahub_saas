@@ -1,0 +1,108 @@
+id: lancepilot_native
+namespace: company.team
+description: Fluxo Dedicado para LancePilot (CRM Oficial WhatsApp).
+
+inputs:
+  - id: message
+    type: JSON
+    description: Payload Webhook LancePilot
+
+tasks:
+
+  # -------------------------------------------------------------------------
+  # TASK 1: INGESTÃO LANCEPILOT
+  # -------------------------------------------------------------------------
+  - id: ingest_lp
+    type: io.kestra.plugin.scripts.python.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: ALWAYS
+    containerImage: marsllator/my-kestra-worker:latest
+    
+    namespaceFiles:
+      enabled: true
+      include: [ "**" ]
+
+    commands:
+      - rm -f .env
+      - export PYTHONPATH=$PYTHONPATH:.
+      - python Kestra_2.0/scripts/lancepilot/ingest.py
+
+    env:
+      KESTRA_TRIGGER_BODY: "{{ (inputs.message ?? trigger.body ?? {}) | json }}"
+      KESTRA_WEBHOOK_TOKEN: "{{ trigger.parameters.token ?? 'None' }}"
+      REDIS_URL: "{{ kv('REDIS_URL') }}"
+      OPENAI_API_KEY: "{{ kv('OPENAI_API_KEY') }}"
+      BUFFER_KEY_SUFIX: "_buffer_lp"
+      BUFFER_TTL: "600"
+      DEBOUNCE_SECONDS: "5"
+      DATABASE_CONNECTION_URI: "{{ kv('DATABASE_URL') }}"
+
+  - id: debounce
+    type: io.kestra.plugin.core.flow.Pause
+    delay: PT10S
+
+  # -------------------------------------------------------------------------
+  # TASK 2: RAG WORKER LANCEPILOT
+  # -------------------------------------------------------------------------
+  - id: rag_worker_lp
+    type: io.kestra.plugin.scripts.python.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    containerImage: marsllator/my-kestra-worker:latest
+    
+    namespaceFiles:
+      enabled: true
+      include: [ "**" ]
+
+    commands:
+      - rm -f .env
+      - export PYTHONPATH=$PYTHONPATH:.
+      - python Kestra_2.0/scripts/lancepilot/rag_worker.py
+
+    env:
+      KESTRA_CHAT_ID: "{{ outputs.ingest_lp.vars.chat_id ?? 'None' }}"
+      KESTRA_CLIENT_TOKEN: "{{ outputs.ingest_lp.vars.client_token ?? 'None' }}" 
+      REDIS_URL: "{{ kv('REDIS_URL') }}"
+      OPENAI_API_KEY: "{{ kv('OPENAI_API_KEY') }}"
+      GEMINI_API_KEY: "{{ kv('GEMINI_API_KEY') }}"
+      GOOGLE_MAPS_API_KEY: "{{ kv('GOOGLE_MAPS_API_KEY') }}"
+      DATABASE_CONNECTION_URI: "{{ kv('DATABASE_URL') }}"
+      VECTOR_STORE_PATH: "vectorstore"
+      RAG_FILES_DIR: "rag_files"
+      BUFFER_KEY_SUFIX: "_buffer_lp"
+
+  # -------------------------------------------------------------------------
+  # TASK 3: SENDER LANCEPILOT
+  # -------------------------------------------------------------------------
+  - id: send_lp
+    type: io.kestra.plugin.scripts.python.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: ALWAYS
+    containerImage: marsllator/my-kestra-worker:latest
+    
+    namespaceFiles:
+      enabled: true
+      include: [ "**" ]
+
+    commands:
+      - rm -f .env
+      - export PYTHONPATH=$PYTHONPATH:.
+      - python Kestra_2.0/scripts/lancepilot/sender.py
+
+    env:
+      KESTRA_CHAT_ID: "{{ outputs.rag_worker_lp.vars.chat_id ?? 'None' }}"
+      KESTRA_RESPONSE_TEXT: "{{ outputs.rag_worker_lp.vars.response_text ?? '' }}"
+      KESTRA_LP_TOKEN: "{{ outputs.rag_worker_lp.vars.lp_token ?? '' }}"
+      KESTRA_LP_WORKSPACE: "{{ outputs.rag_worker_lp.vars.lp_workspace ?? '' }}"
+      REDIS_URL: "{{ kv('REDIS_URL') }}"
+      BUFFER_KEY_SUFIX: "_buffer_lp"
+      BUFFER_TTL: "600"
+      DEBOUNCE_SECONDS: "5"
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: lp_webhook

@@ -1,0 +1,125 @@
+[Skip to main content](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free#content-area)
+[Lancepilot API Documentation home page](https://api.lancepilot.com/)
+[API Reference](https://api.lancepilot.com/)
+- [Website](https://lancepilot.com)
+- [Support](https://api.whatsapp.com/send/?phone=447309574692&text=Hi&type=phone_number&app_absent=0k)
+- [Channel](https://whatsapp.com/channel/0029Vb5QMExEKyZAhMEB8N2k)
+- [Community](https://discord.gg/fVyJhfnQ)
+- [Live Demo](https://www.youtube.com/watch?v=AEh8Rq__6B8)
+[Website](https://lancepilot.com)
+[Support](https://api.whatsapp.com/send/?phone=447309574692&text=Hi&type=phone_number&app_absent=0k)
+[Channel](https://whatsapp.com/channel/0029Vb5QMExEKyZAhMEB8N2k)
+[Community](https://discord.gg/fVyJhfnQ)
+[Live Demo](https://www.youtube.com/watch?v=AEh8Rq__6B8)
+
+##### Documentation
+- [Introduction](https://api.lancepilot.com/)
+[Introduction](https://api.lancepilot.com/)
+
+##### API Reference
+- Workspaces
+- Contacts
+- Send Messages (Via Id)
+- Send Messages (Via Number)[GETCan Send Free Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free)[POSTText Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/text)[POSTImage Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/image)[POSTAudio Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/audio)[POSTVideo Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/video)[POSTDocument Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/document)
+- [GETCan Send Free Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free)
+- [POSTText Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/text)
+- [POSTImage Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/image)
+- [POSTAudio Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/audio)
+- [POSTVideo Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/video)
+- [POSTDocument Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/document)
+- Send Template Messages
+- Channel & Wallet
+- Contact Fields
+- Contact Groups
+- Labels
+- Tags
+- Contact Imports
+- Templates
+- Role & Permissions
+- Users
+- Roles
+- Newsletters
+- [GETCan Send Free Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free)
+- [POSTText Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/text)
+- [POSTImage Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/image)
+- [POSTAudio Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/audio)
+- [POSTVideo Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/video)
+- [POSTDocument Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/document)
+[GETCan Send Free Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free)
+[POSTText Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/text)
+[POSTImage Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/image)
+[POSTAudio Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/audio)
+[POSTVideo Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/video)
+[POSTDocument Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/document)
+cURL
+
+```
+curl --request GET \ --url https://lancepilot.com/api/v3/workspaces/{workspace}/contacts/number/{number}/can-send-free-message \ --header 'Authorization: Bearer <token>'
+```
+
+
+```
+curl --request GET \ --url https://lancepilot.com/api/v3/workspaces/{workspace}/contacts/number/{number}/can-send-free-message \ --header 'Authorization: Bearer <token>'
+```
+
+
+```
+{ "data": { "canSend": true } }
+```
+
+
+```
+{ "data": { "canSend": true } }
+```
+
+# Can Send Free Message
+
+cURL
+
+```
+curl --request GET \ --url https://lancepilot.com/api/v3/workspaces/{workspace}/contacts/number/{number}/can-send-free-message \ --header 'Authorization: Bearer <token>'
+```
+
+
+```
+curl --request GET \ --url https://lancepilot.com/api/v3/workspaces/{workspace}/contacts/number/{number}/can-send-free-message \ --header 'Authorization: Bearer <token>'
+```
+
+
+```
+{ "data": { "canSend": true } }
+```
+
+
+```
+{ "data": { "canSend": true } }
+```
+
+
+#### Authorizations
+[​](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free#authorization-authorization)
+Bearer authentication header of the form Bearer <token>, where <token> is your auth token.
+
+```
+Bearer <token>
+```
+
+
+```
+<token>
+```
+
+
+#### Path Parameters
+[​](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free#parameter-workspace)
+ID of the workspace.
+[​](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free#parameter-number)
+Number of the contact.
+
+#### Response
+[​](https://api.lancepilot.com/pages/endpoints/messages/with-number/can-send-free#response-data)
+Show child attributes
+[Document Message](https://api.lancepilot.com/pages/endpoints/messages/with-id/document)
+[Text Message](https://api.lancepilot.com/pages/endpoints/messages/with-number/text)
+[youtube](https://www.youtube.com/watch?v=AEh8Rq__6B8)
+[Powered by Mintlify](https://www.mintlify.com?utm_campaign=poweredBy&utm_medium=referral&utm_source=lancepilot-3a3d9deb)

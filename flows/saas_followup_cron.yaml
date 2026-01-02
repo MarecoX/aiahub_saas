@@ -1,0 +1,31 @@
+id: saas_followup_cron
+namespace: company.team
+description: "Roda a cada 5min para verificar e enviar Follow-ups de WhatsApp (SaaS)"
+
+tasks:
+  - id: run_followup_worker
+    type: io.kestra.plugin.scripts.python.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    containerImage: marsllator/my-kestra-worker:latest
+    
+    namespaceFiles:
+      enabled: true
+      include: ["**"]
+    
+    commands:
+      - export PYTHONPATH=$PYTHONPATH:.
+      - python Kestra_2.0/scripts/uazapi/followup_worker.py
+
+    env:
+      DATABASE_CONNECTION_URI: "{{ kv('DATABASE_URL') }}"
+      GEMINI_API_KEY: "{{ kv('GEMINI_API_KEY') }}"
+      REDIS_URL: "{{ kv('REDIS_URL') }}"
+      UAZAPI_URL: "{{ kv('UAZAPI_URL') }}"
+      UAZAPI_KEY: "{{ kv('UAZAPI_KEY') }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/5 * * * *"
