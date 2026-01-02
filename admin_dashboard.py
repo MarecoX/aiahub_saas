@@ -170,7 +170,7 @@ with tab2:
     st.header("Clientes Ativos")
     df = list_clients()
     if not df.empty:
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
         if st.button("🔄 Atualizar Lista"):
             st.rerun()
     else:

@@ -155,7 +155,7 @@ def render_admin_view():
                 st.warning("Preencha todos os campos obrigatórios.")
 
     with tab2:
-        st.dataframe(list_clients(), use_container_width=True)
+        st.dataframe(list_clients(), width="stretch")
         if st.button("🔄 Atualizar"):
             st.rerun()
 
