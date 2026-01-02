@@ -27,10 +27,31 @@ class LancePilotClient:
         """
         try:
             url = f"{self.BASE_URL}/workspaces"
-            response = httpx.get(url, headers=self.headers, timeout=10.0)
+            # Tenta aumentar o limite padrão e passar busca
+            params = {"limit": 100, "per_page": 100}
+            if search_query:
+                params["search"] = search_query
+
+            response = httpx.get(url, headers=self.headers, params=params, timeout=10.0)
+
             if response.status_code == 200:
                 data = response.json()
-                return data.get("data", [])
+                items = data.get("data", [])
+
+                # Client-side filtering fallback se a API ignorar o search param
+                if search_query and items:
+                    query = search_query.lower()
+                    filtered = [
+                        i
+                        for i in items
+                        if query in i.get("attributes", {}).get("name", "").lower()
+                        or query in i.get("id", "").lower()
+                    ]
+                    # Se API já filtrou, filtered será igual (ou menor).
+                    # Se API trouxe tudo, filtered reduz.
+                    return filtered
+
+                return items
             return []
         except Exception as e:
             logger.error(f"Erro ao buscar workspaces: {e}")
