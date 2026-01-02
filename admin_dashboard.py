@@ -22,7 +22,7 @@ except ImportError:
 load_dotenv(dotenv_path="../.env")
 
 # Configuração da Página
-st.set_page_config(page_title="Kestra 2.0 | Backoffice", layout="wide", page_icon="🏭")
+st.set_page_config(page_title="AIAHUB CENTER | Admin", layout="wide", page_icon="🚀")
 
 # Conexão DB
 DB_URL = os.getenv("DATABASE_CONNECTION_URI") or os.getenv("DATABASE_URL")
@@ -109,12 +109,13 @@ def update_client_config(client_id, new_config_str, new_timeout, new_api_url):
 
 
 # --- UI ---
-st.title("🏭 Kestra 2.0 - SaaS Admin Panel")
+st.title("🚀 AIAHUB CENTER - Admin Panel")
 
-tab1, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
         "➕ Novo Cliente",
         "📋 Lista de Clientes",
+        "🔐 Gerenciar Senhas",
         "⚙️ Configurações",
         "🛠️ Debug & Manutenção",
     ]
@@ -164,6 +165,44 @@ with tab2:
         st.info("Nenhum cliente encontrado.")
 
 with tab3:
+    st.header("🔐 Gerenciar Senhas dos Clientes")
+    st.caption("Redefine senhas de acesso dos clientes ao painel.")
+
+    df_pass = list_clients()
+    if not df_pass.empty:
+        cli_sel = st.selectbox(
+            "Selecione o Cliente:", df_pass["name"].tolist(), key="sel_pass_client"
+        )
+
+        new_pass = st.text_input(
+            "Nova Senha", type="password", placeholder="Digite a nova senha"
+        )
+
+        if st.button("💾 Atualizar Senha", type="primary"):
+            if new_pass and new_pass.strip():
+                try:
+                    from scripts.shared.auth_utils import hash_password
+
+                    pwd_hash = hash_password(new_pass)
+
+                    cli_row = df_pass[df_pass["name"] == cli_sel].iloc[0]
+                    with get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE clients SET password_hash = %s WHERE id = %s",
+                                (pwd_hash, cli_row["id"]),
+                            )
+                    st.success(
+                        f"✅ Senha de '{cli_sel}' atualizada com sucesso (bcrypt)!"
+                    )
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+            else:
+                st.warning("Digite uma senha válida.")
+    else:
+        st.info("Nenhum cliente cadastrado.")
+
+with tab4:
     st.header("Editor de Ferramentas & Configs")
     df_clients = list_clients()
 
@@ -213,7 +252,7 @@ with tab3:
     else:
         st.warning("Cadastre um cliente primeiro.")
 
-with tab4:
+with tab5:
     st.header("🛠️ Utilitários de Debug")
 
     st.markdown("### 🧹 Limpeza de Memória do Chat")
@@ -238,4 +277,4 @@ with tab4:
 
 # Footer
 st.markdown("---")
-st.caption("Kestra 2.0 SaaS Architecture | Powered by Gemini & Postgres")
+st.caption("AIAHUB CENTER | Powered by OpenAI & Postgres")
