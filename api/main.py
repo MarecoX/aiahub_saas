@@ -9,7 +9,7 @@ logger = logging.getLogger("API_Manager")
 app = FastAPI(
     title="AIAHUB Client Management API",
     description="API para gerenciamento de clientes, tools (LancePilot/Uazapi) e arquivos RAG.",
-    version="1.0.0",
+    version="1.0.1",
 )
 
 # CORS (Permitir acesso de qualquer lugar por enquanto - Ajuste se tiver domínio específico)
