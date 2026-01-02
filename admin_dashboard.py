@@ -180,53 +180,49 @@ with tab3:
     st.header("🔐 Gerenciar Senhas dos Clientes")
     st.caption("Redefine senhas de acesso dos clientes ao painel.")
 
+    # Query simples só para pegar nome e id
     try:
-        df_pass = list_clients()
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name FROM clients ORDER BY name")
+                clients_data = cur.fetchall()
 
-        if df_pass is None or df_pass.empty:
-            st.info("Nenhum cliente cadastrado.")
+        if clients_data:
+            # Cria dicionário nome -> id
+            client_dict = {row["name"]: str(row["id"]) for row in clients_data}
+
+            selected_name = st.selectbox(
+                "Selecione o Cliente:",
+                list(client_dict.keys()),
+                key="pass_client_select",
+            )
+
+            new_password = st.text_input(
+                "Nova Senha", type="password", key="new_pass_input"
+            )
+
+            if st.button("💾 Atualizar Senha", key="btn_update_pass"):
+                if new_password and len(new_password) >= 4:
+                    try:
+                        from scripts.shared.auth_utils import hash_password
+
+                        pwd_hash = hash_password(new_password)
+
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "UPDATE clients SET password_hash = %s WHERE id = %s",
+                                    (pwd_hash, client_dict[selected_name]),
+                                )
+                        st.success(f"✅ Senha de '{selected_name}' atualizada!")
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
+                else:
+                    st.warning("Digite uma senha com pelo menos 4 caracteres.")
         else:
-            # Verifica se coluna 'name' existe
-            if "name" not in df_pass.columns:
-                st.error(
-                    f"Erro: coluna 'name' não encontrada. Colunas disponíveis: {list(df_pass.columns)}"
-                )
-            else:
-                client_names = df_pass["name"].tolist()
-                cli_sel = st.selectbox(
-                    "Selecione o Cliente:", client_names, key="sel_pass_client_v2"
-                )
-
-                new_pass = st.text_input(
-                    "Nova Senha", type="password", placeholder="Digite a nova senha"
-                )
-
-                if st.button("💾 Atualizar Senha", type="primary"):
-                    if new_pass and new_pass.strip():
-                        try:
-                            from scripts.shared.auth_utils import hash_password
-
-                            pwd_hash = hash_password(new_pass)
-
-                            cli_row = df_pass[df_pass["name"] == cli_sel].iloc[0]
-                            with get_connection() as conn:
-                                with conn.cursor() as cur:
-                                    cur.execute(
-                                        "UPDATE clients SET password_hash = %s WHERE id = %s",
-                                        (pwd_hash, cli_row["id"]),
-                                    )
-                            st.success(
-                                f"✅ Senha de '{cli_sel}' atualizada com sucesso (bcrypt)!"
-                            )
-                        except Exception as e:
-                            st.error(f"Erro ao atualizar: {e}")
-                    else:
-                        st.warning("Digite uma senha válida.")
+            st.info("Nenhum cliente cadastrado.")
     except Exception as e:
-        st.error(f"Erro ao carregar tab de senhas: {e}")
-        import traceback
-
-        st.code(traceback.format_exc())
+        st.error(f"Erro ao carregar clientes: {e}")
 
 with tab4:
     st.header("Editor de Ferramentas & Configs")
