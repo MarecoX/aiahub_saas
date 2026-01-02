@@ -91,19 +91,26 @@ def main():
         return
 
     # Carrega view apropriada
-    user_data = st.session_state.get("user_data", {})
-    is_admin = st.session_state.get("is_admin", False)
+    try:
+        user_data = st.session_state.get("user_data", {})
+        is_admin = st.session_state.get("is_admin", False)
 
-    if is_admin:
-        # Admin Dashboard
-        from views.admin_view import render_admin_view
+        if is_admin:
+            # Admin Dashboard
+            from views.admin_view import render_admin_view
 
-        render_admin_view()
-    else:
-        # Client Dashboard
-        from views.client_view import render_client_view
+            render_admin_view()
+        else:
+            # Client Dashboard
+            from views.client_view import render_client_view
 
-        render_client_view(user_data)
+            render_client_view(user_data)
+
+    except Exception as e:
+        st.error(f"Erro crítico ao carregar painel: {e}")
+        import traceback
+
+        st.code(traceback.format_exc())
 
 
 if __name__ == "__main__":

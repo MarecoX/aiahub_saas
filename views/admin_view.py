@@ -12,7 +12,11 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 from scripts.shared.saas_db import get_connection, clear_chat_history
-from api.services import gemini_service as gemini_manager
+
+try:
+    from api.services import gemini_service as gemini_manager
+except ImportError:
+    gemini_manager = None
 
 
 def render_admin_view():
@@ -64,7 +68,7 @@ def render_admin_view():
                             name,
                             token,
                             prompt,
-                            store_id,
+                            store_id,  # Use the potentially updated store_id
                             tools_config,
                             timeout,
                             data_url,

@@ -12,11 +12,19 @@ if root_dir not in sys.path:
 
 from api.services.gemini_service import GeminiService  # noqa: E402
 
-gemini_manager = GeminiService()
+# gemini_manager = GeminiService()
 from scripts.shared.saas_db import get_connection  # noqa: E402
 
 
 def render_client_view(user_data):
+    # Inicializa GeminiService com tratamento de erro
+    try:
+        from api.services.gemini_service import GeminiService
+
+        gemini_manager = GeminiService()
+    except Exception as e:
+        st.error(f"Erro ao inicializar IA: {e}")
+        gemini_manager = None
     # user_data = {'id', 'name', 'store_id', 'system_prompt', ...}
 
     st.title(f"🤖 Kestra AI | {user_data['name']}")
