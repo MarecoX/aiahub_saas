@@ -77,7 +77,19 @@ def list_clients():
                 )
                 rows = cur.fetchall()
                 if rows:
-                    return pd.DataFrame(rows)
+                    # Converte UUIDs e datetimes para strings para evitar erro pyarrow
+                    converted_rows = []
+                    for row in rows:
+                        converted_row = {}
+                        for key, value in row.items():
+                            if hasattr(value, "hex"):  # UUID
+                                converted_row[key] = str(value)
+                            elif hasattr(value, "isoformat"):  # datetime
+                                converted_row[key] = value.isoformat()
+                            else:
+                                converted_row[key] = value
+                        converted_rows.append(converted_row)
+                    return pd.DataFrame(converted_rows)
                 return pd.DataFrame()
     except Exception as e:
         st.error(f"Erro ao listar: {e}")
