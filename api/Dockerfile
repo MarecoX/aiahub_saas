@@ -7,7 +7,11 @@ RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/li
 
 # Install Python Libs
 # Adicione outros requirements se tiver (pandas, streamlit secrets fallback, etc)
-RUN pip install fastapi uvicorn[standard] psycopg[binary] google-genai python-multipart requests python-dotenv
+# Copy Requirements
+COPY requirements.txt /app/requirements.txt
+
+# Install Dependencies
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy Application Code
 # Assumindo que o build context é a raiz (onde está Kestra_2.0)
