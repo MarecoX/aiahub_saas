@@ -144,7 +144,7 @@ class GeminiService:
         except Exception as e:
             logger.error(f"Erro list files: {e}")
             return []
-    
+
     def delete_file(self, file_name: str):
         """
         Deleta um arquivo.
@@ -170,3 +170,4 @@ class GeminiService:
 
 
 # Singleton instance
+service = GeminiService()
