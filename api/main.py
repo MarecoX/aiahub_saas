@@ -1,13 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+import os
 import logging
+
+from api.routers import clients
+from api.routers import meta
 
 # Configuração de Logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("API_Manager")
 
 app = FastAPI(
-    title="AIAHUB Client Management API",
+    title="AIAHUB CONECT API",
     description="API para gerenciamento de clientes, tools (LancePilot/Uazapi) e arquivos RAG.",
     version="1.0.1",
 )
@@ -28,6 +33,25 @@ def health_check():
     return {"status": "ok", "service": "AIAHUB Client Manager"}
 
 
-from api.routers import clients  # noqa: E402
+@app.get("/politica-de-privacidade", response_class=HTMLResponse)
+async def privacy_policy():
+    """Retorna a página de Política de Privacidade para conformidade com o Facebook."""
+    # Caminho relativo considerando execução da raiz ou api/
+    possible_paths = ["views/privacy_policy.html", "../views/privacy_policy.html"]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+
+    return "<h1>Erro: Política de Privacidade não encontrada.</h1>"
+
+
+@app.get("/")
+async def root():
+    """Rota raiz para Health Check fácil (evita 404 no browser)."""
+    return {"status": "online", "service": "AIAHUB CONECT API", "docs": "/docs"}
+
 
 app.include_router(clients.router)
+app.include_router(meta.router)

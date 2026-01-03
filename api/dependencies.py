@@ -4,8 +4,8 @@ import sys
 
 # Ajusta Path para importar scripts/saas_db.py
 current_dir = os.path.dirname(os.path.abspath(__file__))
-scripts_dir = os.path.join(current_dir, "..", "scripts")
-sys.path.append(scripts_dir)
+scripts_shared_dir = os.path.join(current_dir, "..", "scripts", "shared")
+sys.path.append(scripts_shared_dir)
 
 from saas_db import get_connection  # noqa: E402
 

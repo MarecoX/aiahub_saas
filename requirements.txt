@@ -16,3 +16,7 @@ psycopg[binary]
 redis
 kestra
 bcrypt
+python-multipart
+streamlit
+watchdog
+pandas

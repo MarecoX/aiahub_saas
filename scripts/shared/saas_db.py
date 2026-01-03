@@ -139,6 +139,39 @@ def get_client_token_by_phone(phone_number: str):
         return None
 
 
+def get_client_token_by_waba_phone(phone_id: str):
+    """
+    Busca o Token do Cliente pesquisando dentro do JSONB tools_config
+    pelo campo 'whatsapp_official' -> 'phone_id'.
+    """
+    if not DB_URL or not phone_id:
+        return None
+
+    try:
+        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                # Busca cliente onde (tools_config -> 'whatsapp_official' ->> 'phone_id') match
+                sql = """
+                    SELECT token 
+                    FROM clients 
+                    WHERE tools_config->'whatsapp_official'->>'phone_id' = %s
+                    LIMIT 1
+                """
+                cur.execute(sql, (phone_id,))
+                result = cur.fetchone()
+
+                if result:
+                    logger.info(
+                        f"✅ Cliente WABA identificado via PhoneID {phone_id}: {result['token']}"
+                    )
+                    return result["token"]
+                else:
+                    return None
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar cliente via WABA PhoneID: {e}")
+        return None
+
+
 # --- FUNÇÕES DE ESCRITA (API/ADMIN) ---
 
 

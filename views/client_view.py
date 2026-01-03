@@ -27,7 +27,7 @@ def render_client_view(user_data):
         gemini_manager = None
     # user_data = {'id', 'name', 'store_id', 'system_prompt', ...}
 
-    st.title(f"🤖 Kestra AI | {user_data['name']}")
+    st.title(f"🤖 AIAHUB CONECT | {user_data['name']}")
 
     col_info, col_logout = st.columns([4, 1])
     with col_info:
@@ -38,13 +38,22 @@ def render_client_view(user_data):
             st.rerun()
 
     # --- TABS ---
-    tab_files, tab_prompt, tab_sim, tab_tools, tab_whatsapp, tab_followup = st.tabs(
+    (
+        tab_files,
+        tab_prompt,
+        tab_sim,
+        tab_tools,
+        tab_whatsapp,
+        tab_meta_official,
+        tab_followup,
+    ) = st.tabs(
         [
             "📂 Meus Arquivos (RAG)",
             "🧠 Personalidade (Prompt)",
             "💬 Testar Assistente",
             "🔗 Integrações e Ferramentas",
             "📱 Conexão WhatsApp",
+            "🟢 WhatsApp Oficial",
             "⏰ Follow-up Autônomo",
         ]
     )
@@ -758,3 +767,348 @@ def render_client_view(user_data):
                 st.balloons()
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
+
+    # --- TAB 7: META OFFICIAL (NOVA) ---
+    with tab_meta_official:
+        st.header("WhatsApp Oficial (Meta API)")
+        st.caption("Conecte sua conta WABA para estabilidade total.")
+
+        meta_cfg = t_config.get("whatsapp_official", {})
+
+        # --- SUB-TABS ---
+        mt_config, mt_templates = st.tabs(["⚙️ Configuração", "📝 Templates"])
+
+        with mt_config:
+            active_meta = st.toggle(
+                "Ativar Integração Oficial", value=meta_cfg.get("active", False)
+            )
+
+            mc1, mc2 = st.columns(2)
+            waba_id = mc1.text_input(
+                "WABA ID (Conta Business)", value=meta_cfg.get("waba_id", "")
+            )
+            phone_id = mc2.text_input(
+                "Phone ID (Identificação do Número)", value=meta_cfg.get("phone_id", "")
+            )
+
+            token = st.text_input(
+                "Token Permanente (System User)",
+                value=meta_cfg.get("token", ""),
+                type="password",
+            )
+
+            st.info(
+                "ℹ️ Para obter esses dados, acesse o Gerenciador de Negócios da Meta."
+            )
+            st.markdown("#### 🔗 Webhook para Meta App")
+            st.info(
+                "Configure esta URL no painel do seu App na Meta (Caso você seja o dono do App)."
+            )
+
+            # Force correct API domain ignoring DB config
+            webhook_base = "https://api.aiahub.com.br"
+            verify_token = "aiahub_meta_secret_2026"  # The real secret
+            webhook_url = f"{webhook_base}/api/v1/meta/webhook/{verify_token}"
+
+            c_url, c_copy = st.columns([4, 1])
+            c_url.text_input(
+                "URL de Callback",
+                value=webhook_url,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+            c_url.caption(f"Verify Token: aiahub_meta_secret_2026")
+
+            col_save, col_verify = st.columns(2)
+
+            if col_save.button("💾 Salvar e Subscrever", type="primary"):
+                if not waba_id or not token:
+                    st.error("Preencha WABA ID e Token.")
+                else:
+                    # 1. Salva no Banco
+                    new_tools = t_config.copy()
+                    new_tools["whatsapp_official"] = {
+                        "active": active_meta,
+                        "waba_id": waba_id,
+                        "phone_id": phone_id,
+                        "token": token,
+                    }
+
+                    try:
+                        import json
+
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "UPDATE clients SET tools_config = %s WHERE id = %s",
+                                    (json.dumps(new_tools), user_data["id"]),
+                                )
+                        user_data["tools_config"] = new_tools
+
+                        # 2. Executa Subscrição na Meta (Subscribe App to WABA)
+                        st.subheader("Processando Integração...")
+                        try:
+                            from scripts.meta.meta_client import MetaClient
+
+                            mc = MetaClient(token, phone_id)
+
+                            with st.status(
+                                "Conectando com Meta Cloud API...", expanded=True
+                            ) as status:
+                                st.write("🔄 Autenticando...")
+                                # Valida Phone ID
+                                info = asyncio.run(mc.get_phone_number_info())
+                                if info:
+                                    st.write(
+                                        f"✅ Número Identificado: {info.get('display_phone_number')} ({info.get('quality_rating')})"
+                                    )
+                                else:
+                                    st.error("❌ Token ou ID inválidos.")
+                                    status.update(state="error")
+                                    st.stop()
+
+                                st.write("🔄 Inscrevendo App na WABA (Webhooks)...")
+                                ok = asyncio.run(mc.subscribe_app_to_waba(waba_id))
+                                if ok:
+                                    st.write("✅ Webhooks Ativados com Sucesso!")
+                                    status.update(
+                                        label="Integração Concluída!", state="complete"
+                                    )
+                                    st.success("Configuração Salva e Conectada!")
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        "❌ Falha na subscrição (Verifique permissões do Token)."
+                                    )
+                                    status.update(state="error")
+                        except Exception as e:
+                            st.error(f"Erro na conexão: {e}")
+
+                    except Exception as e:
+                        st.error(f"Erro ao salvar banco: {e}")
+
+            if col_verify.button("🔄 Verificar Status"):
+                if not token:
+                    st.warning("Sem token configurado.")
+                else:
+                    try:
+                        from scripts.meta.meta_client import MetaClient
+
+                        mc = MetaClient(token, phone_id)
+                        info = asyncio.run(mc.get_phone_number_info())
+                        if info:
+                            st.success(f"ONLINE: {info.get('display_phone_number')}")
+                            st.json(info)
+                        else:
+                            st.error("OFFLINE ou Token Inválido")
+                    except Exception as e:
+                        st.error(str(e))
+
+        with mt_templates:
+            st.subheader("Gerenciar Templates")
+
+            # --- FORMULÁRIO DE CRIAÇÃO ---
+            with st.expander("➕ Criar Novo Template", expanded=True):
+                st.caption(
+                    "Crie templates para aprovação da Meta. O nome deve ser minúsculo e sem espaços."
+                )
+
+                col_form, col_prev = st.columns([1.5, 1])
+
+                with col_form:
+                    c_name, c_cat, c_lang = st.columns(3)
+                    t_name = c_name.text_input("Nome (ex: promo_verao)")
+                    t_cat = c_cat.selectbox(
+                        "Categoria", ["MARKETING", "UTILITY", "AUTHENTICATION"]
+                    )
+                    t_lang = c_lang.selectbox("Idioma", ["pt_BR", "en_US"])
+
+                    st.markdown("**Componentes**")
+                    t_header = st.text_input(
+                        "Cabeçalho (Opcional)",
+                        placeholder="Ex: Oferta Especial!",
+                        key="th",
+                    )
+                    t_body = st.text_area(
+                        "Corpo (Obrigatório)",
+                        placeholder="Olá {{1}}, confira nossas ofertas!",
+                        height=150,
+                        key="tb",
+                    )
+                    t_footer = st.text_input(
+                        "Rodapé (Opcional)",
+                        placeholder="Ex: Enviado por Kestra",
+                        key="tf",
+                    )
+
+                    st.markdown("**Botões (Quick Reply)**")
+                    c_btn1, c_btn2 = st.columns(2)
+                    btn1_text = c_btn1.text_input("Botão 1", key="b1")
+                    btn2_text = c_btn2.text_input("Botão 2", key="b2")
+
+                    submit = st.button(
+                        "📤 Criar e Enviar para Aprovação",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                with col_prev:
+                    st.markdown("##### 📱 Preview")
+                    # Simulation Styling
+                    preview_html = f"""
+                    <div style="
+                        background-color: #E5DDD5; 
+                        border-radius: 15px; 
+                        padding: 20px; 
+                        font-family: Helvetica, Arial, sans-serif; 
+                        border: 1px solid #ccc;
+                        min-height: 300px;
+                    ">
+                        <div style="
+                            background-color: #DCF8C6; 
+                            border-radius: 7.5px; 
+                            padding: 10px; 
+                            box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+                            max-width: 90%;
+                        ">
+                            {f'<div style="font-weight: bold; margin-bottom: 5px; color: #000;">{t_header}</div>' if t_header else ""}
+                            <div style="white-space: pre-wrap; color: #000;">{t_body or "Digitar corpo..."}</div>
+                            {f'<div style="font-size: 11px; color: #999; margin-top: 5px;">{t_footer}</div>' if t_footer else ""}
+                        </div>
+                        {f'<div style="margin-top: 5px; background: white; color: #00a5f4; text-align: center; padding: 10px; border-radius: 7px; cursor: pointer; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);">{btn1_text}</div>' if btn1_text else ""}
+                        {f'<div style="margin-top: 5px; background: white; color: #00a5f4; text-align: center; padding: 10px; border-radius: 7px; cursor: pointer; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);">{btn2_text}</div>' if btn2_text else ""}
+                    </div>
+                    """
+                    st.markdown(preview_html, unsafe_allow_html=True)
+
+                if submit:
+                    if not t_name or not t_body:
+                        st.error("Nome e Corpo são obrigatórios.")
+                    elif not meta_cfg.get("waba_id"):
+                        st.error("WABA ID não encontrado na configuração.")
+                    else:
+                        # Monta Payload
+                        components = []
+                        if t_header:
+                            components.append(
+                                {"type": "HEADER", "format": "TEXT", "text": t_header}
+                            )  # Header
+                        components.append({"type": "BODY", "text": t_body})  # Body
+                        if t_footer:
+                            components.append(
+                                {"type": "FOOTER", "text": t_footer}
+                            )  # Footer
+
+                        buttons_list = []  # Buttons
+                        if btn1_text:
+                            buttons_list.append(
+                                {"type": "QUICK_REPLY", "text": btn1_text}
+                            )
+                        if btn2_text:
+                            buttons_list.append(
+                                {"type": "QUICK_REPLY", "text": btn2_text}
+                            )
+                        if buttons_list:
+                            components.append(
+                                {"type": "BUTTONS", "buttons": buttons_list}
+                            )
+
+                        # Envia
+                        with st.spinner("Enviando solicitação para Meta..."):
+                            try:
+                                from scripts.meta.meta_client import MetaClient
+
+                                mc = MetaClient(meta_cfg["token"], meta_cfg["phone_id"])
+                                resp = asyncio.run(
+                                    mc.create_template_waba(
+                                        waba_id=meta_cfg["waba_id"],
+                                        name=t_name.lower().strip(),
+                                        category=t_cat,
+                                        language=t_lang,
+                                        components=components,
+                                    )
+                                )
+                                if "id" in resp:
+                                    st.success(
+                                        f"✅ Template Criado! ID: {resp['id']} (Status: PENDING)"
+                                    )
+                                    st.info("Aguarde a aprovação da Meta.")
+                                elif "error" in resp:
+                                    st.error(f"Erro Meta: {resp['error']}")
+                                else:
+                                    st.error(f"Erro desconhecido: {resp}")
+                            except Exception as e:
+                                st.error(f"Falha ao criar: {e}")
+
+            st.markdown("---")
+            st.subheader("Templates Aprovados")
+            if not meta_cfg.get("active") or not meta_cfg.get("token"):
+                st.warning("Ative a integração e configure o Token primeiro.")
+            else:
+                if st.button("🔄 Sincronizar Templates da Meta"):
+                    with st.spinner("Buscando na Graph API..."):
+                        try:
+                            from scripts.meta.meta_client import MetaClient
+
+                            mc = MetaClient(meta_cfg["token"], meta_cfg["phone_id"])
+                            templates = asyncio.run(
+                                mc.get_templates(meta_cfg["waba_id"])
+                            )
+                            st.session_state[f"meta_templates_{user_data['id']}"] = (
+                                templates
+                            )
+                            st.success(f"{len(templates)} templates encontrados!")
+                        except Exception as e:
+                            st.error(f"Erro ao buscar: {e}")
+
+                templates_list = st.session_state.get(
+                    f"meta_templates_{user_data['id']}", []
+                )
+
+                if templates_list:
+                    for t in templates_list:
+                        with st.expander(f"{t['name']} ({t['status']})"):
+                            st.json(t)
+                            # Test Send Input
+                            c_dest, c_btn = st.columns([3, 1])
+                            dest_test = c_dest.text_input(
+                                "Destino (Ex: 5511999999999)", key=f"dest_{t['name']}"
+                            )
+                            if c_btn.button("🚀 Enviar", key=f"btn_{t['name']}"):
+                                if not dest_test:
+                                    st.warning("Digite o número de destino.")
+                                else:
+                                    with st.spinner("Enviando..."):
+                                        try:
+                                            from scripts.meta.meta_client import (
+                                                MetaClient,
+                                            )
+
+                                            mc = MetaClient(
+                                                meta_cfg["token"], meta_cfg["phone_id"]
+                                            )
+
+                                            # Envia template sem variáveis (teste simples)
+                                            # Para templates complexos, precisaria de Inputs dinâmicos,
+                                            # mas para o vídeo de aprovação, um template Hello World basta.
+                                            resp = asyncio.run(
+                                                mc.send_message_template(
+                                                    to=dest_test,
+                                                    template_name=t["name"],
+                                                    language_code=t.get("language")
+                                                    or "pt_BR",
+                                                )
+                                            )
+
+                                            if resp and "messages" in resp:
+                                                st.success(
+                                                    f"Enviado! ID: {resp['messages'][0]['id']}"
+                                                )
+                                                st.json(resp)
+                                            else:
+                                                st.error("Erro no envio.")
+                                                st.json(resp)
+                                        except Exception as e:
+                                            st.error(f"Falha: {e}")
+                else:
+                    st.info("Nenhum template carregado. Clique em Sincronizar.")
