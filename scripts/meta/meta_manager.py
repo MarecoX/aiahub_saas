@@ -1,7 +1,11 @@
 import logging
 from typing import Dict, Any, Optional
 
-from scripts.shared.saas_db import get_client_config, get_client_token_by_waba_phone
+from scripts.shared.saas_db import (
+    get_client_config,
+    get_client_token_by_waba_phone,
+    add_message,
+)
 from scripts.shared.chains_saas import ask_saas
 from scripts.meta.meta_client import MetaClient
 
@@ -73,26 +77,41 @@ async def process_incoming_webhook(data: Dict[str, Any]):
 
                 # Processa Mensagens
                 messages = value.get("messages", [])
-                contacts = value.get("contacts", [])
-
                 for msg in messages:
                     msg_type = msg.get("type")
                     from_phone = msg.get("from")  # Número do Cliente Final
 
+                    # --- INBOX LOGGING (USER) ---
+                    msg_content = ""
+                    media_url = None
+                    if msg_type == "text":
+                        msg_content = msg["text"]["body"]
+                    elif msg_type == "image":
+                        msg_content = msg.get("image", {}).get("caption", "[Imagem]")
+                    elif msg_type == "audio":
+                        msg_content = "[Áudio]"
+                    else:
+                        msg_content = f"[{msg_type.upper()}]"
+
+                    add_message(
+                        client_id=client_config["id"],
+                        chat_id=from_phone,
+                        role="user",
+                        content=msg_content,
+                        media_url=media_url,
+                    )
+                    # -----------------------------
+
                     # LÓGICA DE RESPOSTA (Texto apenas por enquanto)
                     if msg_type == "text":
-                        user_text = msg["text"]["body"]
+                        user_text = msg_content
                         logger.info(f"📩 WABA Msg de {from_phone}: {user_text}")
 
                         # CHAMA O AGENTE IA
-                        chat_id = f"waba_{phone_id_from_webhook}_{from_phone}"  # Ex: waba_1010_5511999...
-
-                        # Show typing...
-                        # (Meta não tem typing indicator oficial fácil na API Cloud v1, mas ok)
 
                         response_text = await ask_saas(
                             query=user_text,
-                            chat_id=chat_id,
+                            chat_id=from_phone,
                             system_prompt=client_config["system_prompt"],
                             client_config=client_config,
                             tools_list=[],  # Implementar tools se necessário
@@ -101,37 +120,40 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                         # Envia Resposta
                         await meta.send_message_text(from_phone, response_text)
 
+                        # --- INBOX LOGGING (ASSISTANT) ---
+                        add_message(
+                            client_id=client_config["id"],
+                            chat_id=from_phone,
+                            role="assistant",
+                            content=response_text,
+                        )
+                        # ---------------------------------
+
                     elif msg_type == "image":
                         # Payload: msg["image"] -> {id, mime_type, sha256, caption}
                         image_data = msg.get("image", {})
                         media_id = image_data.get("id")
-                        caption = image_data.get("caption", "")
-                        mime_type = image_data.get("mime_type")
 
-                        logger.info(
-                            f"📸 WABA Imagem de {from_phone} | ID: {media_id} | Caption: {caption}"
-                        )
+                        logger.info(f"📸 WABA Imagem de {from_phone} | ID: {media_id}")
 
-                        # TODO: Baixar mídia usando meta.get_media_url(media_id) e passar para Vision API
-                        # Por enquanto, avisamos que recebemos
-                        await meta.send_message_text(
-                            from_phone, f"📸 Recebi sua imagem! (ID: {media_id})"
-                        )
+                        # TODO: Baixar mídia e passar para Vision API
+                        resp = f"📸 Recebi sua imagem! (ID: {media_id})"
+                        await meta.send_message_text(from_phone, resp)
+
+                        add_message(client_config["id"], from_phone, "assistant", resp)
 
                     elif msg_type == "audio":
                         # Payload: msg["audio"] -> {id, mime_type, voice}
                         audio_data = msg.get("audio", {})
                         media_id = audio_data.get("id")
-                        is_voice = audio_data.get("voice", False)
 
-                        logger.info(
-                            f"🎤 WABA Áudio de {from_phone} | ID: {media_id} | VoiceNote: {is_voice}"
-                        )
+                        logger.info(f"🎤 WABA Áudio de {from_phone} | ID: {media_id}")
 
-                        # TODO: Baixar mídia e transcrever com Whisper
-                        await meta.send_message_text(
-                            from_phone, f"🎤 Recebi seu áudio! (ID: {media_id})"
-                        )
+                        # TODO: Transcrever com Whisper
+                        resp = f"🎤 Recebi seu áudio! (ID: {media_id})"
+                        await meta.send_message_text(from_phone, resp)
+
+                        add_message(client_config["id"], from_phone, "assistant", resp)
 
                     else:
                         logger.info(

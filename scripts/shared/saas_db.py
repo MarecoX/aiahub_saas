@@ -1,6 +1,7 @@
 import os
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 import logging
 from dotenv import load_dotenv
 
@@ -27,13 +28,26 @@ if not DB_URL:
         pass  # Não está rodando no Streamlit ou sem secrets
 
 
+# Global Pool variable
+_pool = None
+
+
 def get_connection():
-    """Retorna uma conexão Psycopg 3 configurada (dict_row, autocommit)."""
+    """Retorna uma conexão do Pool (Context Manager Safe)."""
+    global _pool
     if not DB_URL:
-        raise ValueError(
-            "DATABASE_CONNECTION_URI não configurada! Configure no .env ou Streamlit Secrets."
+        raise ValueError("DATABASE_CONNECTION_URI não configurada!")
+
+    # Initialize Pool if not exists
+    if _pool is None:
+        _pool = ConnectionPool(
+            conninfo=DB_URL,
+            min_size=1,
+            max_size=20,
+            kwargs={"row_factory": dict_row, "autocommit": True},
         )
-    return psycopg.connect(DB_URL, row_factory=dict_row, autocommit=True)
+
+    return _pool.connection()
 
 
 def get_client_config(token: str):
@@ -46,8 +60,8 @@ def get_client_config(token: str):
         return None
 
     try:
-        # Usando Context Manager do Psycopg 3 (Fecha sozinho)
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
+        # Usando Pool Connection
+        with get_connection() as conn:
             # logger.info(f"🔌 Conectado ao BD: {conn.info.dbname} @ {conn.info.host}")
 
             with conn.cursor() as cur:
@@ -87,8 +101,8 @@ def clear_chat_history(thread_id: str):
     ]
 
     try:
-        # Autocommit=True dispensa conn.commit()
-        with psycopg.connect(DB_URL, autocommit=True) as conn:
+        # Pool handles connection
+        with get_connection() as conn:
             with conn.cursor() as cur:
                 for q in queries:
                     cur.execute(q, (thread_id,))
@@ -289,4 +303,99 @@ def get_all_clients_db():
                 return cur.fetchall()
     except Exception as e:
         logger.error(f"❌ Erro ao listar clientes: {e}")
+        return []
+
+
+# --- INBOX FUNCTIONS (Chat History) ---
+
+
+def ensure_chat_messages_table():
+    """Cria a tabela de mensagens se não existir."""
+    sql = """
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id SERIAL PRIMARY KEY,
+        client_id UUID REFERENCES clients(id),
+        chat_id TEXT NOT NULL,
+        role TEXT NOT NULL, -- 'user' or 'assistant' or 'system'
+        content TEXT,
+        media_url TEXT,
+        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id);
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar tabela chat_messages: {e}")
+
+
+# Run once on import (safe)
+ensure_chat_messages_table()
+
+
+def add_message(
+    client_id, chat_id: str, role: str, content: str, media_url: str = None
+):
+    """
+    Salva uma mensagem no histórico.
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO chat_messages (client_id, chat_id, role, content, media_url)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (client_id, chat_id, role, content, media_url),
+                )
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar mensagem no Inbox: {e}")
+
+
+def get_messages(client_id, chat_id: str, limit: int = 50):
+    """
+    Recupera o histórico da conversa ordenado.
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, role, content, media_url, created_at 
+                    FROM chat_messages 
+                    WHERE client_id = %s AND chat_id = %s
+                    ORDER BY created_at ASC
+                    LIMIT %s
+                    """,
+                    (client_id, chat_id, limit),
+                )
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar mensagens: {e}")
+        return []
+
+
+def get_inbox_conversations(client_id):
+    """
+    Retorna lista de conversas ativas (Baseada na tabela active_conversations).
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT chat_id, last_message_at, last_role, status 
+                    FROM active_conversations 
+                    WHERE client_id = %s
+                    ORDER BY last_message_at DESC
+                    LIMIT 20
+                    """,
+                    (client_id,),
+                )
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar conversas do Inbox: {e}")
         return []

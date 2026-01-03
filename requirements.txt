@@ -13,6 +13,7 @@ pypdf
 openai
 chromadb
 psycopg[binary]
+psycopg-pool
 redis
 kestra
 bcrypt

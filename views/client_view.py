@@ -12,8 +12,14 @@ if root_dir not in sys.path:
 
 from api.services.gemini_service import GeminiService  # noqa: E402
 
-# gemini_manager = GeminiService()
-from scripts.shared.saas_db import get_connection  # noqa: E402
+
+from scripts.shared.saas_db import (
+    get_connection,
+    get_inbox_conversations,
+    get_messages,
+    add_message,
+)  # noqa: E402
+from scripts.meta.meta_client import MetaClient
 
 
 def render_client_view(user_data):
@@ -46,6 +52,7 @@ def render_client_view(user_data):
         tab_whatsapp,
         tab_meta_official,
         tab_followup,
+        tab_inbox,
     ) = st.tabs(
         [
             "📂 Meus Arquivos (RAG)",
@@ -55,6 +62,7 @@ def render_client_view(user_data):
             "📱 Conexão WhatsApp",
             "🟢 WhatsApp Oficial",
             "⏰ Follow-up Autônomo",
+            "📬 Inbox",
         ]
     )
 
@@ -1112,3 +1120,94 @@ def render_client_view(user_data):
                                             st.error(f"Falha: {e}")
                 else:
                     st.info("Nenhum template carregado. Clique em Sincronizar.")
+
+    # --- TAB 8: INBOX (NOVA) ---
+    with tab_inbox:
+        st.header("📬 Inbox WhatsApp")
+        st.caption("Visualize e responda conversas em tempo real.")
+
+        meta_cfg = user_data.get("tools_config", {}).get("whatsapp_official", {})
+        if not meta_cfg.get("active"):
+            st.warning("⚠️ Ative o WhatsApp Oficial na aba anterior para usar o Inbox.")
+        else:
+            c_list, c_chat = st.columns([1, 2.5])
+
+            # --- COLUNA 1: LISTA DE CONTATOS ---
+            with c_list:
+                st.subheader("Conversas")
+                if st.button("🔄 Atualizar"):
+                    st.rerun()
+
+                conversations = get_inbox_conversations(user_data["id"])
+
+                if not conversations:
+                    st.info("Nenhuma conversa recente.")
+
+                for conv in conversations:
+                    chat_id = conv["chat_id"]
+                    # Tenta formatar bonito (Data ou Status)
+                    label = f"📱 {chat_id}"
+                    if conv.get("last_role") == "user":
+                        label += " 🔴"  # Cliente falou por ultimo
+                    else:
+                        label += " 🟢"
+
+                    if st.button(
+                        label, key=f"chat_btn_{chat_id}", use_container_width=True
+                    ):
+                        st.session_state["active_chat_id"] = chat_id
+                        st.rerun()
+
+            # --- COLUNA 2: ÁREA DE CHAT ---
+            with c_chat:
+                active_id = st.session_state.get("active_chat_id")
+
+                if not active_id:
+                    st.info("👈 Selecione uma conversa na esquerda.")
+                else:
+                    st.markdown(f"**Conversando com:** `{active_id}`")
+                    st.divider()
+
+                    # Container para rolagem (Streamlit nativo ja rola)
+                    chat_container = st.container()
+
+                    with chat_container:
+                        history = get_messages(user_data["id"], active_id, limit=50)
+
+                        if not history:
+                            st.caption("Nenhum histórico encontrado.")
+
+                        for msg in history:
+                            role = msg["role"]
+                            content = msg["content"]
+
+                            # Mapeia role 'user' -> 'user' (Direita), 'assistant' -> 'assistant' (Esquerda)
+                            # Mas no st.chat_message, 'user' é icone de pessoa, 'assistant' é robo.
+                            # Se role for 'user' (Cliente) -> st.chat_message("user")
+                            # Se role for 'assistant' (Nós) -> st.chat_message("assistant")
+
+                            with st.chat_message(role):
+                                st.markdown(content)
+                                st.caption(
+                                    f"{msg['created_at'].strftime('%H:%M')} - {role}"
+                                )
+
+                    # INPUT AREA
+                    if prompt := st.chat_input("Digite sua resposta..."):
+                        # 1. Enviar via Meta API
+                        with st.spinner("Enviando..."):
+                            try:
+                                mc = MetaClient(meta_cfg["token"], meta_cfg["phone_id"])
+                                # Envia texto
+                                asyncio.run(mc.send_message_text(active_id, prompt))
+
+                                # 2. Salvar no Banco (Assistant)
+                                add_message(
+                                    client_id=user_data["id"],
+                                    chat_id=active_id,
+                                    role="assistant",
+                                    content=prompt,
+                                )
+                                st.rerun()  # Atualiza UI
+                            except Exception as e:
+                                st.error(f"Erro ao enviar: {e}")
