@@ -3,7 +3,12 @@ FROM python:3.11-slim
 WORKDIR /app
 
 
-# Copia e instala dependências
+# Instala dependências do sistema para Mime Types (Fix HTML raw text)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends media-types && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copia e instala dependências Python
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt

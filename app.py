@@ -3,6 +3,12 @@ AIAHUB CENTER - Entry Point com Login
 """
 
 import streamlit as st
+import mimetypes
+
+# FORÇAR MIME TYPES (Correção para Docker Slim / Streamlit Static)
+mimetypes.add_type("text/html", ".html")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/javascript", ".js")
 import os
 import sys
 
@@ -26,7 +32,7 @@ def verify_login(username: str, password: str):
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, username, password_hash, is_admin, system_prompt, gemini_store_id, api_url, tools_config, human_attendant_timeout FROM clients WHERE username = %s",
+                    "SELECT id, name, username, password_hash, is_admin, system_prompt, gemini_store_id, api_url, tools_config, human_attendant_timeout, token FROM clients WHERE username = %s",
                     (username,),
                 )
                 user = cur.fetchone()
@@ -48,6 +54,7 @@ def verify_login(username: str, password: str):
                             "id": str(user["id"]),
                             "name": user["name"],
                             "username": user["username"],
+                            "token": user["token"],  # Token for API calls
                             "is_admin": user.get("is_admin", False),
                             "system_prompt": user.get("system_prompt", ""),
                             "store_id": user.get(
@@ -88,7 +95,7 @@ def render_login():
                 st.warning("Preencha usuário e senha.")
 
     st.markdown("---")
-    st.caption("AIAHUB CENTER | Powered by OpenAI")
+    st.caption("AIAHUB CENTER")
 
 
 def main():

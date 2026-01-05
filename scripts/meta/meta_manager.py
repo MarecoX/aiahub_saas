@@ -8,6 +8,11 @@ from scripts.shared.saas_db import (
 )
 from scripts.shared.chains_saas import ask_saas
 from scripts.meta.meta_client import MetaClient
+from scripts.shared.chains_saas import ask_saas
+from scripts.meta.meta_client import MetaClient
+from scripts.shared.media_utils import transcribe_audio_bytes, analyze_image_bytes
+import redis
+from scripts.shared.tools_library import get_enabled_tools
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +66,11 @@ async def process_incoming_webhook(data: Dict[str, Any]):
 
                 # Extrai Credenciais WABA do tools_config do cliente
                 tools = client_config.get("tools_config", {})
-                waba_cfg = tools.get("whatsapp_official", {})
+
+                # Check priority: 'whatsapp' (new) > 'whatsapp_official' (legacy)
+                waba_cfg = tools.get("whatsapp", {})
+                if not waba_cfg.get("active") and not waba_cfg.get("token"):
+                    waba_cfg = tools.get("whatsapp_official", {})
 
                 # Validação de Segurança
                 if not waba_cfg.get("active"):
@@ -70,7 +79,9 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     )
                     continue
 
-                access_token = waba_cfg.get("token")  # Token do System User
+                access_token = waba_cfg.get("access_token") or waba_cfg.get(
+                    "token"
+                )  # Token do System User
 
                 # Instancia Cliente Graph API
                 meta = MetaClient(access_token, phone_id_from_webhook)
@@ -80,6 +91,25 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                 for msg in messages:
                     msg_type = msg.get("type")
                     from_phone = msg.get("from")  # Número do Cliente Final
+
+                    # --- CHECK HUMAN PAUSE (REDIS) ---
+                    # Verifica se o atendimento foi pausado para humano
+                    try:
+                        redis_url = (
+                            client_config.get("redis_url") or "redis://localhost:6379"
+                        )
+                        r = redis.Redis.from_url(redis_url, decode_responses=True)
+                        pause_key = f"ai_paused:{from_phone}"
+                        if r.get(pause_key):
+                            logger.info(
+                                f"🛑 Chat {from_phone} pausado por humano. Ignorando mensagem."
+                            )
+                            r.close()
+                            continue
+                        r.close()
+                    except Exception as e:
+                        logger.error(f"Erro ao checar Redis Pause: {e}")
+                    # ---------------------------------
 
                     # --- INBOX LOGGING (USER) ---
                     msg_content = ""
@@ -102,19 +132,81 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     )
                     # -----------------------------
 
-                    # LÓGICA DE RESPOSTA (Texto apenas por enquanto)
+                    # -----------------------------
+
+                    # LÓGICA DE UNIFICAÇÃO DE TEXTO (Multimodal)
+                    user_text = None
+
                     if msg_type == "text":
                         user_text = msg_content
-                        logger.info(f"📩 WABA Msg de {from_phone}: {user_text}")
+
+                    elif msg_type == "audio":
+                        audio_data = msg.get("audio", {})
+                        media_id = audio_data.get("id")
+                        mime_type = audio_data.get("mime_type", "audio/ogg")
+
+                        logger.info(f"🎙️ WABA Áudio de {from_phone} | ID: {media_id}")
+
+                        # Download & Transcribe
+                        try:
+                            media_url = await meta.get_media_url(media_id)
+                            if media_url:
+                                audio_bytes = await meta.download_media_bytes(media_url)
+                                if audio_bytes:
+                                    transcription = transcribe_audio_bytes(audio_bytes)
+                                    user_text = f"[ÁUDIO DO USUÁRIO]: {transcription}"
+                        except Exception as e:
+                            logger.error(f"❌ Falha ao processar áudio: {e}")
+                            user_text = "[Áudio enviado, mas erro na transcrição]"
+
+                    elif msg_type == "image":
+                        image_data = msg.get("image", {})
+                        media_id = image_data.get("id")
+                        mime_type = image_data.get("mime_type", "image/jpeg")
+                        caption = image_data.get("caption", "")
+
+                        logger.info(f"📸 WABA Imagem de {from_phone} | ID: {media_id}")
+
+                        # Download & Analyze
+                        try:
+                            media_url = await meta.get_media_url(media_id)
+                            if media_url:
+                                image_bytes = await meta.download_media_bytes(media_url)
+                                if image_bytes:
+                                    description = analyze_image_bytes(
+                                        image_bytes, mime_type
+                                    )
+                                    user_text = f"[IMAGEM ENVIADA]:\nDescrição Visual: {description}"
+                                    if caption:
+                                        user_text += f"\nLegenda do Usuário: {caption}"
+                        except Exception as e:
+                            logger.error(f"❌ Falha ao processar imagem: {e}")
+                            user_text = (
+                                f"[Imagem enviada: {caption}]"
+                                if caption
+                                else "[Imagem enviada]"
+                            )
+
+                    # PROCESSAMENTO FINAL (SE HOUVER TEXTO OU CONTEXTO MULTIMODAL)
+                    if user_text:
+                        logger.info(
+                            f"📩 WABA Processando de {from_phone}: {user_text[:100]}..."
+                        )
+
+                        # PREPARE TOOLS
+                        tools_list = get_enabled_tools(
+                            tools_config=tools.get("functions", {}),
+                            chat_id=from_phone,
+                            client_config=client_config,
+                        )
 
                         # CHAMA O AGENTE IA
-
                         response_text = await ask_saas(
                             query=user_text,
                             chat_id=from_phone,
                             system_prompt=client_config["system_prompt"],
                             client_config=client_config,
-                            tools_list=[],  # Implementar tools se necessário
+                            tools_list=tools_list,
                         )
 
                         # Envia Resposta
@@ -128,28 +220,6 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                             content=response_text,
                         )
                         # ---------------------------------
-
-                    elif msg_type == "image":
-                        # Payload: msg["image"] -> {id, mime_type, sha256, caption}
-                        image_data = msg.get("image", {})
-                        media_id = image_data.get("id")
-
-                        logger.info(f"📸 WABA Imagem de {from_phone} | ID: {media_id}")
-
-                        # TODO: Baixar mídia e passar para Vision API
-                        resp = f"📸 Recebi sua imagem! (ID: {media_id})"
-                        await meta.send_message_text(from_phone, resp)
-
-                        add_message(client_config["id"], from_phone, "assistant", resp)
-
-                    elif msg_type == "audio":
-                        # Payload: msg["audio"] -> {id, mime_type, voice}
-                        audio_data = msg.get("audio", {})
-                        media_id = audio_data.get("id")
-
-                        logger.info(f"🎤 WABA Áudio de {from_phone} | ID: {media_id}")
-
-                        # TODO: Transcrever com Whisper
                         resp = f"🎤 Recebi seu áudio! (ID: {media_id})"
                         await meta.send_message_text(from_phone, resp)
 

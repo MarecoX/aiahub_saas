@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>AIAHUB - Conexão WhatsApp</title>
+    <style>
+        body {
+            font-family: Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #f0f2f5;
+        }
+
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        h2 {
+            margin-bottom: 20px;
+            color: #1c1e21;
+        }
+
+        #status {
+            margin-top: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+
+        button {
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #166fe5 !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h2>Conectar WhatsApp Business</h2>
+        <p>Clique abaixo para iniciar a conexão com a Meta.</p>
+        <div id="fb-root"></div>
+        <br>
+        <button onclick="launchWhatsAppSignup()"
+            style="background-color: #1877f2; border: 0; border-radius: 4px; color: #fff; cursor: pointer; font-family: Helvetica, Arial, sans-serif; font-size: 16px; font-weight: bold; height: 40px; padding: 0 24px;">Login
+            with Facebook</button>
+
+        <div id="status">Aguardando login...</div>
+        <!-- Hidden debug pres -->
+        <pre id="session-info-response" style="display:none"></pre>
+        <pre id="sdk-response" style="display:none"></pre>
+    </div>
+
+    <script>
+        // Configurações Dinâmicas via URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const APP_ID = urlParams.get('app_id') || '825239677170334'; // Fallback
+        const CONFIG_ID = urlParams.get('config_id') || '1240691471290119'; // Fallback
+        const API_VERSION = urlParams.get('version') || 'v24.0';
+        const CLIENT_TOKEN = urlParams.get('token'); // Captura Token do Cliente para vincular
+
+        console.log("Config loaded:", { APP_ID, CONFIG_ID, API_VERSION });
+
+        let capturedWabaId = null;
+        let capturedPhoneId = null;
+
+        window.addEventListener('message', (event) => {
+            if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") {
+                return;
+            }
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'WA_EMBEDDED_SIGNUP') {
+                    if (data.event === 'FINISH') {
+                        const { phone_number_id, waba_id } = data.data;
+                        capturedWabaId = waba_id;
+                        capturedPhoneId = phone_number_id;
+                        document.getElementById("status").innerHTML = "✅ Dados Capturados! (WABA: " + waba_id + ")";
+                        console.log("Captured IDs:", data.data);
+                    } else if (data.event === 'CANCEL') {
+                        document.getElementById("status").textContent = "⚠️ Cancelado pelo usuário.";
+                    }
+                }
+            } catch {
+                // Ignorar mensagens não-JSON
+            }
+        });
+
+        const fbLoginCallback = (response) => {
+            if (response.authResponse) {
+                const code = response.authResponse.code;
+                console.log("Code received:", code);
+                document.getElementById("status").textContent = "🔄 Autenticado! Trocando token... (Code: " + code.substring(0, 5) + "...)";
+
+                // Prepare payload
+                const payload = {
+                    code: code,
+                    token: CLIENT_TOKEN,
+                    waba_id: capturedWabaId,
+                    phone_id: capturedPhoneId
+                };
+
+                // POST code + token + IDs to our backend
+                fetch('/api/v1/meta/oauth_exchange', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.ok) {
+                            document.getElementById("status").innerHTML = "✅ Sucesso! Conexão e Vínculo realizados.";
+                        } else {
+                            document.getElementById("status").innerHTML = "❌ Erro no backend: " + data.detail;
+                        }
+                    });
+            }
+        };
+
+        const launchWhatsAppSignup = () => {
+            FB.login(fbLoginCallback, {
+                config_id: CONFIG_ID,
+                response_type: 'code',
+                override_default_response_type: true,
+                extras: {
+                    "featureType": "whatsapp_business_app_onboarding",
+                    "sessionInfoVersion": "3",
+                    "version": "v3",
+                    "features": [
+                        { "name": "marketing_messages_lite" },
+                        { "name": "app_only_install" }
+                    ]
+                }
+            });
+        }
+
+        window.fbAsyncInit = function () {
+            FB.init({
+                appId: APP_ID,
+                autoLogAppEvents: true,
+                xfbml: true,
+                version: API_VERSION
+            });
+        };
+    </script>
+    <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>
+</body>
+
+</html>

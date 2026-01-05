@@ -1,11 +1,12 @@
 import os
+import sys
 import redis.asyncio as redis
 import logging
 import asyncio
 from kestra import Kestra
 
 # Import local modules
-import sys
+
 
 # Adiciona o diretório 'shared' ao path para importar módulos compartilhados
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -93,9 +94,11 @@ async def run_rag():
     from chains_saas import ask_saas
 
     try:
-        # Carrega Tools Dinâmicas (passa chat_id para injeção em atendimento_humano)
+        # Carrega Tools Dinâmicas (passa chat_id e client_config para injeção correta)
         tools_list = get_enabled_tools(
-            client_config.get("tools_config"), chat_id=chat_id
+            client_config.get("tools_config"),
+            chat_id=chat_id,
+            client_config=client_config,
         )
 
         # Chama o Cérebro (OpenAI)

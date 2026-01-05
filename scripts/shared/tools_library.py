@@ -1,6 +1,8 @@
 import os
 import httpx
 import logging
+from langchain.tools import tool
+from langchain_core.tools import StructuredTool
 
 
 logger = logging.getLogger("KestraTools")
@@ -15,9 +17,6 @@ else:
     logger.warning(
         "⚠️ GOOGLE_MAPS_API_KEY não encontrada! A tool consultar_cep vai falhar."
     )
-
-
-from langchain.tools import tool
 
 
 @tool
@@ -412,10 +411,10 @@ AVAILABLE_TOOLS = {
     "audio": audio,
 }
 
-from langchain_core.tools import StructuredTool
 
-
-def get_enabled_tools(tools_config: dict, chat_id: str = None):
+def get_enabled_tools(
+    tools_config: dict, chat_id: str = None, client_config: dict = None
+):
     """
     Retorna a lista de funcoes Python para passar pro Gemini.
     Suporta configuração injetada (dict).
@@ -423,6 +422,7 @@ def get_enabled_tools(tools_config: dict, chat_id: str = None):
     Args:
         tools_config: Dicionário de configuração das tools.
         chat_id: ID do chat atual (para injetar em tools como atendimento_humano).
+        client_config: Dict completo do cliente (para pegar api_url, token, etc).
 
     Ex: tools_config = {
         "consultar_cep": true,
@@ -499,10 +499,27 @@ def get_enabled_tools(tools_config: dict, chat_id: str = None):
                     # Injeta dependencias (grupo_id, uazapi, template)
                     grupo_cfg = config_dict.get("grupo_id", "")
                     template_cfg = config_dict.get("template", "")
-                    # Uazapi vem da config global do cliente (buscar de outro lugar)
-                    # Por agora, assumimos que vem de env vars
-                    uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
-                    uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
+
+                    # Uazapi vem da config global do cliente (DB) ou Env Var (Fallback)
+                    uazapi_url_cfg = ""
+                    uazapi_token_cfg = ""
+
+                    if client_config:
+                        # Tenta pegar do banco (coluna api_url e token do cliente)
+                        uazapi_url_cfg = client_config.get("api_url")
+                        # O token do cliente no banco geralmente é o token Uazapi também, ou tem um campo específico?
+                        # No modelo atual, 'token' é o que identifica o cliente, mas 'api_url' é a Uazapi dele.
+                        # Vamos assumir que o 'token' do cliente serve para a Uazapi (se for Multi-Tenant Uazapi)
+                        # OU se precisamos de um token específico.
+                        # O usuario disse: "o que é usado no banco seria token que é o da uazapi né"
+                        uazapi_token_cfg = client_config.get("token")
+
+                    # Fallback para Env Vars
+                    if not uazapi_url_cfg:
+                        uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
+                    if not uazapi_token_cfg:
+                        uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
+
                     fn = tool_func.func if hasattr(tool_func, "func") else tool_func
 
                     def wrapped_relatorio(tipo: str = "ficha", dados: dict = None):

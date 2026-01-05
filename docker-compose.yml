@@ -15,6 +15,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ADMIN_API_SECRET=${ADMIN_API_SECRET}
+      - META_APP_ID=${META_APP_ID}
+      - META_APP_SECRET=${META_APP_SECRET}
     deploy:
       mode: replicated
       replicas: 1
@@ -48,7 +50,7 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.kestra_dashboard.rule=Host(`painel.aiahub.com.br`)"
+        - "traefik.http.routers.kestra_dashboard.rule=Host(`acesso.aiahub.com.br`)"
         - "traefik.http.routers.kestra_dashboard.entrypoints=websecure"
         - "traefik.http.routers.kestra_dashboard.tls.certresolver=letsencryptresolver"
         - "traefik.http.routers.kestra_dashboard.service=kestra_dashboard"

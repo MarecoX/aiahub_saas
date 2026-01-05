@@ -11,13 +11,13 @@ from saas_db import (
     get_client_config,
     get_all_clients_db,
     update_tools_config_db,
+    delete_client_db,
 )
 from api.services.gemini_service import service as gemini_service
 
 router = APIRouter(
-    prefix="/clients",
-    tags=["clients"],
-    dependencies=[Depends(verify_token)],  # Protege todas as rotas
+    tags=["Clients"],  # Standardized Tag
+    dependencies=[Depends(verify_token)],
 )
 
 logger = logging.getLogger("API_Clients")
@@ -33,6 +33,25 @@ def list_clients():
 @router.post("/", status_code=201)
 def create_client(client: ClientCreate, x_admin_user: str = Header("admin")):
     """Cria um novo cliente."""
+    # 1. Verifica duplicidade
+    existing = get_client_config(client.token)
+    if existing:
+        raise HTTPException(status_code=400, detail="Cliente já existe com este token.")
+
+    # 2. Auto-Criação do Gemini Store (RAG)
+    store_id = client.gemini_store_id
+    if not store_id:
+        logger.info(f"Criando Gemini Store automático para: {client.name}")
+        store, err = gemini_service.get_or_create_vector_store(
+            f"Store-{client.name.replace(' ', '-')}"
+        )
+        if store:
+            store_id = store.name
+            logger.info(f"✅ Store criado: {store_id}")
+        else:
+            logger.warning(f"⚠️ Falha ao criar Store automático: {err}")
+
+    # 3. Cria no Banco
     from scripts.shared.auth_utils import hash_password
 
     # Gera senha temporária que deverá ser alterada
@@ -47,15 +66,41 @@ def create_client(client: ClientCreate, x_admin_user: str = Header("admin")):
         password_hash=pwd_hash,
         api_url=client.api_url,
         timeout=client.human_attendant_timeout,
-        store_id=client.gemini_store_id,
+        store_id=store_id,
     )
 
     if not new_id:
+        # Tenta buscar o erro se possível ou apenas informa
         raise HTTPException(
-            status_code=400, detail="Erro ao criar cliente. Verifique logs."
+            status_code=400,
+            detail="Erro ao criar cliente (Possível duplicidade de NOME ou USERNAME). Verifique se já não existe um cliente com este nome.",
         )
 
-    return {"id": new_id, "message": "Cliente criado com sucesso"}
+    return {
+        "id": new_id,
+        "message": "Cliente criado com sucesso",
+        "gemini_store_id": store_id,
+        "temp_password": temp_password,
+    }
+
+
+@router.delete("/{token}", status_code=204)
+def delete_client(token: str, x_admin_user: str = Header("admin")):
+    """Remove um cliente e seus dados."""
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    # DB Delete logic would go here. Importing/Checking if db function exists.
+    # Assuming delete_client_db exists or we need to add it to saas_db.
+    # Since we can't edit saas_db easily in one go, checking imports first.
+    # Actually, let's implement the SQL directly here or add to saas_db.
+    # We will assume saas_db needs update.
+    # For now, let's fail if not implemented.
+    success = delete_client_db(client["id"])
+    if not success:
+        raise HTTPException(status_code=500, detail="Erro ao deletar cliente")
+    return
 
 
 @router.get("/{token}")

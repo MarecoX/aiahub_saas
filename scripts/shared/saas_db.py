@@ -27,6 +27,21 @@ if not DB_URL:
     except Exception:
         pass  # Não está rodando no Streamlit ou sem secrets
 
+# LOG DB_URL (MASKED) FOR DEBUGGING
+if DB_URL:
+    safe_url = DB_URL
+    if "@" in safe_url:
+        # Mask password: postgres://user:pass@host -> postgres://user:***@host
+        try:
+            prefix, rest = safe_url.split("@", 1)
+            scheme_user_pass, _ = prefix.rsplit(":", 1)
+            safe_url = f"{scheme_user_pass}:***@{rest}"
+        except Exception:
+            safe_url = "ErrorMaskingURL"
+    logger.info(f"🔌 DATABASE_URL Carregada: {safe_url}")
+else:
+    logger.error("❌ DATABASE_CONNECTION_URI ESTÁ VAZIA!")
+
 
 # Global Pool variable
 _pool = None
@@ -45,6 +60,7 @@ def get_connection():
             min_size=1,
             max_size=20,
             kwargs={"row_factory": dict_row, "autocommit": True},
+            check=ConnectionPool.check_connection,  # Garante que a conexão está viva
         )
 
     return _pool.connection()
@@ -67,7 +83,6 @@ def get_client_config(token: str):
             with conn.cursor() as cur:
                 sql = """
                     SELECT id, name, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, token,
-                           uazapi_url, uazapi_token, uazapi_active,
                            lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active
                     FROM clients 
                     WHERE token = %s
@@ -164,14 +179,16 @@ def get_client_token_by_waba_phone(phone_id: str):
     try:
         with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
-                # Busca cliente onde (tools_config -> 'whatsapp_official' ->> 'phone_id') match
+                # Busca cliente onde (tools_config -> 'whatsapp' ->> 'phone_id')
+                # OU (tools_config -> 'whatsapp_official' ->> 'phone_id') match
                 sql = """
                     SELECT token 
                     FROM clients 
-                    WHERE tools_config->'whatsapp_official'->>'phone_id' = %s
+                    WHERE tools_config->'whatsapp'->>'phone_id' = %s
+                       OR tools_config->'whatsapp_official'->>'phone_id' = %s
                     LIMIT 1
                 """
-                cur.execute(sql, (phone_id,))
+                cur.execute(sql, (phone_id, phone_id))
                 result = cur.fetchone()
 
                 if result:
@@ -236,6 +253,32 @@ def create_client_db(
         return None
 
 
+def delete_client_db(client_id):
+    """
+    Remove um cliente e seus dados do banco.
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # 1. Remove mensagens (Opcional, com cascade isso seria automatico mas por segurança...)
+                cur.execute(
+                    "DELETE FROM chat_messages WHERE client_id = %s", (client_id,)
+                )
+
+                # 2. Remove conversas ativas
+                # (Se existir tabela active_conversations, se não ignorar ou usar try catch especifico)
+                # cur.execute("DELETE FROM active_conversations WHERE client_id = %s", (client_id,))
+
+                # 3. Remove cliente
+                cur.execute("DELETE FROM clients WHERE id = %s", (client_id,))
+
+                logger.info(f"🗑️ Cliente {client_id} deletado com sucesso.")
+                return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao deletar cliente {client_id}: {e}")
+        return False
+
+
 def update_client_db(client_id, update_dict):
     """
     Atualiza campos genéricos do cliente.
@@ -247,6 +290,7 @@ def update_client_db(client_id, update_dict):
         "api_url",
         "name",
         "gemini_store_id",
+        "ai_active",
     ]
     filtered = {k: v for k, v in update_dict.items() if k in valid_fields}
 

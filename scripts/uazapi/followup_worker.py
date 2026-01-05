@@ -1,12 +1,10 @@
 import os
 import sys
 import logging
-import json
-import asyncio
 import datetime
+import asyncio
 import redis.asyncio as redis
 from google import genai
-from psycopg.rows import dict_row
 
 # Add path to import local modules (shared directory)
 sys.path.append(
@@ -81,17 +79,11 @@ async def analyze_context(chat_id, instruction):
 
 
 async def check_and_run_followups():
-    logger.info("🔍 Checking for stalled conversations...")
+    logger.info("🔍 Checking for stalled conversations (UAZAPI)...")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
             # Join active_conversations with clients
-            # Debug: Log Query Start
-            logger.info("🕵️ Executing DB Query for candidates...")
-
-            # Buscando leads onde O BOT falou por último ('assistant')
-            # Removi o filtro JSON do SQL para debugarmos no Python se está vindo ou não
-            # Buscando leads onde O BOT falou por último ('assistant') e status é ATIVO
             cur.execute("""
                 SELECT 
                     ac.chat_id, 
@@ -101,6 +93,7 @@ async def check_and_run_followups():
                     ac.followup_stage,
                     ac.last_context,
                     c.followup_config,
+                    c.tools_config,
                     c.username
                 FROM active_conversations ac
                 JOIN clients c ON ac.client_id = c.id
@@ -109,15 +102,32 @@ async def check_and_run_followups():
             """)
 
             rows = cur.fetchall()
-            logger.info(f"📊 Rows found (Active Assistant): {len(rows)}")
+            logger.info(f"📊 Rows found: {len(rows)}")
 
             for row in rows:
                 chat_id = row["chat_id"]
-                client_id = row["client_id"]  # Importante para PK composta
+                client_id = row["client_id"]
                 last_msg_at = row["last_message_at"]
                 current_stage_idx = row["followup_stage"] or 0
                 config = row["followup_config"] or {}
                 last_context_txt = row.get("last_context") or ""
+                tools_config_json = row.get("tools_config") or {}
+
+                # ----------------------------------------------------
+                # SEPARATION OF CONCERNS:
+                # Se este cliente usa Meta Oficial Ativo, este worker DEVE IGNORAR.
+                # Quem cuida dele é o meta_followup_worker.py
+                # ----------------------------------------------------
+                # ----------------------------------------------------
+                meta_cfg = tools_config_json.get("whatsapp", {})
+                meta_legacy = tools_config_json.get("whatsapp_official", {})
+                lp_cfg = tools_config_json.get("lancepilot", {})
+
+                # IGNORA SE FOR META OU LANCEPILOT
+                if meta_cfg.get("active") or meta_legacy.get("active"):
+                    continue
+                if lp_cfg.get("active"):
+                    continue
 
                 # Check Active Flag via Python
                 is_active = config.get("active")
@@ -148,64 +158,58 @@ async def check_and_run_followups():
                 diff_minutes = (now - last_msg_at).total_seconds() / 60
 
                 if diff_minutes >= delay_min:
-                    logger.info(
-                        f"🚀 Triggering Follow-up Stage {current_stage_idx + 1} for {chat_id}/{client_id}"
-                    )
-
-                    # Check 2 & Generate: SMART Context Analysis
-                    # Prompt pede para analisar se acabou ou se deve enviar
-                    analysis_prompt = f"""
-                    Você é um especialista em atendimento. Analise a conversa abaixo.
-                    
-                    Histórico Recente:
-                    Last Context: "{last_context_txt[-2000:]}"
-                    (Obs: Pode estar truncado)
-
-                    Instrução de Retomada: "{prompt_behavior}"
-
-                    DECISÃO:
-                    1. Se o cliente já encerrou, agradeceu, ou disse que não quer mais nada -> Responda APENAS: "FINISHED"
-                    2. Se o contexto pede retomada -> Responda com a mensagem de texto para enviar ao cliente.
-                    """
-
+                    # Logic Generation... (Simplified for restore)
                     try:
-                        resp_ai = client.models.generate_content(
-                            model="gemini-1.5-flash", contents=analysis_prompt
-                        ).text.strip()
+                        analysis_prompt = f"""
+                        Você é um especialista em atendimento. Analise a conversa abaixo.
+                        
+                        Histórico Recente:
+                        Last Context: "{last_context_txt[-2000:]}"
+                        
+                        Instrução de Retomada: "{prompt_behavior}"
 
-                        if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
-                            # Smart Termination
-                            logger.info(
-                                f"🛑 Smart Termination for {chat_id}: Context indicates finished."
-                            )
-                            cur.execute(
-                                """
-                                UPDATE active_conversations SET status = 'finished' 
-                                WHERE chat_id = %s AND client_id = %s
-                            """,
-                                (chat_id, client_id),
-                            )
-                            conn.commit()
-                        else:
-                            # Send Message
-                            await send_whatsapp_message(chat_id, resp_ai)
-                            logger.info(
-                                f"✅ Sent Stage {current_stage_idx + 1} to {chat_id}"
-                            )
+                        DECISÃO:
+                        1. Se o cliente já encerrou/agradeceu -> Responda APENAS: "FINISHED"
+                        2. Se pode retomar -> Responda com a mensagem de texto.
+                        """
+                        if client:
+                            resp_ai = client.models.generate_content(
+                                model="gemini-2.5-flash", contents=analysis_prompt
+                            ).text.strip()
 
-                            cur.execute(
-                                """
-                                UPDATE active_conversations 
-                                SET last_message_at = NOW(),
-                                    followup_stage = %s
-                                WHERE chat_id = %s AND client_id = %s
-                            """,
-                                (current_stage_idx + 1, chat_id, client_id),
-                            )
-                            conn.commit()
+                            if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
+                                # Smart Termination
+                                logger.info(
+                                    f"🛑 Smart Termination for {chat_id} (UAZAPI)"
+                                )
+                                cur.execute(
+                                    """
+                                    UPDATE active_conversations SET status = 'finished' 
+                                    WHERE chat_id = %s AND client_id = %s
+                                """,
+                                    (chat_id, client_id),
+                                )
+                                conn.commit()
+                            else:
+                                # UAZAPI SPECIFIC SEND
+                                await send_whatsapp_message(chat_id, resp_ai)
+                                logger.info(
+                                    f"✅ [UAZAPI] Sent Stage {current_stage_idx + 1} to {chat_id}"
+                                )
+
+                                cur.execute(
+                                    """
+                                    UPDATE active_conversations 
+                                    SET last_message_at = NOW(),
+                                        followup_stage = %s
+                                    WHERE chat_id = %s AND client_id = %s
+                                """,
+                                    (current_stage_idx + 1, chat_id, client_id),
+                                )
+                                conn.commit()
 
                     except Exception as e:
-                        logger.error(f"Erro na AI generation: {e}")
+                        logger.error(f"Erro AI Generation: {e}")
 
 
 if __name__ == "__main__":

@@ -132,7 +132,6 @@ class MetaClient:
         Cria um novo template de mensagem na WABA.
         Necessário para aprovação 'whatsapp_business_management'.
         """
-        url = f"{BASE_URL}/{self.phone_id}/message_templates"
         # Para criar templates, usamos o WABA ID, não o Phone ID.
         # Mas a Meta aceita via WABA ID. Vamos precisar do WABA ID aqui.
         # Ajuste: O método precisa receber o WABA ID, ou o cliente precisa ser inicializado com ele.
@@ -140,6 +139,121 @@ class MetaClient:
         # mas a documentação diz POST /{whatsapp-business-account-id}/message_templates.
         # O self.phone_id é o ID do número.
         pass
+
+    async def set_two_step_verification(self, pin: str) -> bool:
+        """
+        Define o PIN de verificação em duas etapas para o número de telefone.
+        Endpoint: POST /{phone_number_id}
+        Body: {"pin": "123456"}
+        """
+        url = f"{BASE_URL}/{self.phone_id}"
+        payload = {"pin": pin}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    url, headers=self.headers, json=payload, timeout=10
+                )
+                if response.status_code == 200 and response.json().get("success"):
+                    logger.info(f"✅ PIN definido via API para {self.phone_id}")
+                    return True
+                else:
+                    logger.error(f"❌ Falha ao definir PIN: {response.text}")
+                    return False
+            except Exception as e:
+                logger.error(f"❌ Erro ao definir PIN API: {e}")
+                return False
+
+    async def request_verification_code(self, method: str = "SMS") -> bool:
+        """
+        Solicita o envio do código de verificação (SMS ou VOICE).
+        POST /{phone_id}/request_code
+        """
+        url = f"{BASE_URL}/{self.phone_id}/request_code"
+        payload = {"code_method": method, "language": "pt_BR"}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    url, headers=self.headers, json=payload, timeout=15
+                )
+                if response.status_code == 200:
+                    success = response.json().get("success")
+                    if success:
+                        logger.info("✅ Código de verificação solicitado com sucesso.")
+                        return True
+                logger.error(f"❌ Falha ao solicitar código: {response.text}")
+                return False
+            except Exception as e:
+                logger.error(f"❌ Erro ao solicitar código: {e}")
+                return False
+
+    async def verify_and_register(self, code: str, pin: str) -> bool:
+        """
+        Verifica o código recebido e registra o telefone com o PIN de 2 fatores.
+        Passo 1: POST /{phone_id}/verify_code
+        Passo 2: POST /{phone_id}/register
+        """
+        # 1. Verificar Código
+        url_verify = f"{BASE_URL}/{self.phone_id}/verify_code"
+        payload_verify = {"code": code}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                resp_verify = await client.post(
+                    url_verify, headers=self.headers, json=payload_verify, timeout=15
+                )
+                if resp_verify.status_code != 200:
+                    logger.error(f"❌ Código incorreto ou expirado: {resp_verify.text}")
+                    return False
+
+                # 2. Registrar (Definir PIN)
+                url_register = f"{BASE_URL}/{self.phone_id}/register"
+                payload_register = {"messaging_product": "whatsapp", "pin": pin}
+
+                resp_register = await client.post(
+                    url_register,
+                    headers=self.headers,
+                    json=payload_register,
+                    timeout=15,
+                )
+
+                if resp_register.status_code == 200 and resp_register.json().get(
+                    "success"
+                ):
+                    logger.info("✅ Telefone registrado com sucesso!")
+                    return True
+
+                logger.error(f"❌ Falha no registro final: {resp_register.text}")
+                return False
+
+            except Exception as e:
+                logger.error(f"❌ Erro no fluxo de verificação: {e}")
+                return False
+
+    async def register_phone(self, pin: str) -> bool:
+        """
+        Registra o telefone na Cloud API (Finalização).
+        Deve ser chamado se o status for VERIFIED mas 'Account does not exist'.
+        POST /{phone_id}/register
+        """
+        url = f"{BASE_URL}/{self.phone_id}/register"
+        payload = {"messaging_product": "whatsapp", "pin": pin}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    url, headers=self.headers, json=payload, timeout=15
+                )
+                if response.status_code == 200 and response.json().get("success"):
+                    logger.info("✅ Telefone registrado via API com sucesso!")
+                    return True
+
+                logger.error(f"❌ Falha no registro: {response.text}")
+                return False
+            except Exception as e:
+                logger.error(f"❌ Erro ao registrar telefone: {e}")
+                return False
 
     async def create_template_waba(
         self,
@@ -187,4 +301,95 @@ class MetaClient:
                     return response.json()
                 return None
             except Exception:
+                return None
+
+    async def get_business_profile(self) -> Optional[Dict[str, Any]]:
+        """
+        Recupera os dados do Perfil de Negócios (Bio, Email, Site, etc).
+        GET /{phone_id}/whatsapp_business_profile
+        """
+        url = f"{BASE_URL}/{self.phone_id}/whatsapp_business_profile"
+        params = {
+            "fields": "about,address,description,email,profile_picture_url,websites,vertical"
+        }
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    url, headers=self.headers, params=params, timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    # A resposta geralmente é {"data": [{...}]}
+                    if "data" in data and len(data["data"]) > 0:
+                        return data["data"][0]
+                return {}
+            except Exception as e:
+                logger.error(f"❌ Erro ao buscar Business Profile: {e}")
+                return None
+
+    async def update_business_profile(self, data: Dict[str, Any]) -> bool:
+        """
+        Atualiza os dados do Perfil.
+        POST /{phone_id}/whatsapp_business_profile
+        """
+        url = f"{BASE_URL}/{self.phone_id}/whatsapp_business_profile"
+
+        # Payload base obrigatório
+        payload = {"messaging_product": "whatsapp", **data}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    url, headers=self.headers, json=payload, timeout=15
+                )
+                if response.status_code == 200:
+                    success = response.json().get("success")
+                    if success:
+                        logger.info("✅ Business Profile atualizado com sucesso!")
+                        return True
+
+                logger.error(f"❌ Falha ao atualizar perfil: {response.text}")
+                return False
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar Business Profile: {e}")
+                return False
+
+    async def get_media_url(self, media_id: str) -> Optional[str]:
+        """
+        Obtém a URL de download de uma mídia pelo ID.
+        GET /{media_id}
+        """
+        url = f"{BASE_URL}/{media_id}"
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("url")
+                else:
+                    logger.error(
+                        f"❌ Erro ao obter URL de mídia ({media_id}): {response.text}"
+                    )
+                    return None
+            except Exception as e:
+                logger.error(f"❌ Erro de conexão (get_media_url): {e}")
+                return None
+
+    async def download_media_bytes(self, media_url: str) -> Optional[bytes]:
+        """
+        Baixa o conteúdo binário de uma Mídia.
+        Requer token no Header Authorization (já incluso self.headers).
+        """
+        async with httpx.AsyncClient() as client:
+            try:
+                # O download também precisa do Auth Header
+                response = await client.get(media_url, headers=self.headers, timeout=30)
+                if response.status_code == 200:
+                    return response.content
+                else:
+                    logger.error(f"❌ Erro ao baixar binário: {response.status_code}")
+                    return None
+            except Exception as e:
+                logger.error(f"❌ Erro download_media_bytes: {e}")
                 return None

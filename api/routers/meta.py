@@ -1,13 +1,28 @@
-from fastapi import APIRouter, Request, Query, HTTPException, Depends
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Request, Query, HTTPException
+from fastapi.responses import (
+    PlainTextResponse,
+    FileResponse,
+    JSONResponse,
+)
 import logging
+import os
 
 from scripts.meta.meta_manager import verify_webhook_challenge, process_incoming_webhook
 from scripts.meta.meta_client import MetaClient
-from scripts.shared.saas_db import get_client_config
+from scripts.meta.meta_oauth import exchange_code_for_token
+from scripts.shared.saas_db import (
+    get_client_config,
+    update_tools_config_db,
+    get_connection,
+)
+from api.models import OAuthCode
+from api.services.meta_service import MetaService
 
-router = APIRouter(prefix="/api/v1/meta", tags=["Meta WhatsApp Official"])
+router = APIRouter(tags=["Meta WhatsApp Official"])
 logger = logging.getLogger(__name__)
+
+# Instancia o serviço
+meta_service = MetaService()
 
 
 @router.get("/webhook/{client_verify_token}")
@@ -21,10 +36,6 @@ async def meta_webhook_challenge(
     Endpoint para validação do domínio pela Meta (Handshake).
     A Meta exige que isso retorne o hub.challenge em *plaintext*.
     """
-    # Em produção real, o 'client_verify_token' na URL pode ser ignorado
-    # se usarmos um token fixo global, ou validado.
-    # Neste design, o verify_token é fixo no código do manager.
-
     challenge = verify_webhook_challenge(hub_mode, hub_verify_token, hub_challenge)
     if challenge:
         # Retorna PlainText como exigido exatamento pela Meta
@@ -38,9 +49,6 @@ async def meta_webhook_event(client_verify_token: str, request: Request):
     """
     Recebe eventos de mensagem (POST).
     """
-    # A validação de assinatura X-Hub-Signature-256 deveria ocorrer aqui para segurança máxima.
-    # Por enquanto, confiamos no payload struct.
-
     try:
         data = await request.json()
         logger.info(f"🔔 WEBHOOK POST RECEBIDO: {data}")
@@ -64,14 +72,131 @@ async def list_templates(client_token: str):
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
 
     tools = client.get("tools_config", {})
-    waba = tools.get("whatsapp_official", {})
+    waba = tools.get("whatsapp", {})
 
-    if not waba.get("active"):
+    # Check for both formats: old 'whatsapp_official' and new 'whatsapp'
+    if not waba.get("mode") == "official" and not tools.get(
+        "whatsapp_official", {}
+    ).get("active"):
+        # Try legacy key
+        waba = tools.get("whatsapp_official", {})
+
+    if not waba.get("active") and not waba.get("token"):
         raise HTTPException(status_code=400, detail="Integração Meta não ativa")
 
     try:
-        meta = MetaClient(waba["token"], waba["phone_id"])
-        templates = await meta.get_templates(waba["waba_id"])  # Requer WABA ID
+        meta = MetaClient(
+            waba.get("token") or waba.get("access_token"), waba.get("phone_id")
+        )
+        templates = await meta.get_templates(waba.get("waba_id"))  # Requer WABA ID
         return templates
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/signup-static")
+async def get_signup_static(
+    app_id: str = None, config_id: str = None, version: str = None, token: str = None
+):
+    """
+    Serve o arquivo estático com Headers Corretos + Cache Control.
+    """
+    file_path = "static/facebook-embedded-signup.html"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Static File not found")
+
+    return FileResponse(
+        file_path,
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@router.post("/oauth_exchange")
+async def meta_oauth_exchange(payload: OAuthCode):
+    """
+    Recebe o code da Meta (Client Side) + Token interno do Cliente.
+    Troca por Access Token e Salva no Banco.
+    Recebe também waba_id e phone_id para salvar.
+    """
+    logger.info(f"🔄 [Meta OAuth] Iniciando troca para Token: {payload.token}")
+
+    # 1. Busca configurações do cliente usando o token interno
+    client_config = get_client_config(payload.token)
+
+    if not client_config:
+        logger.error(f"❌ Cliente não encontrado para o token: {payload.token}")
+        # Debug: List all clients or count them to see if DB is empty
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT count(*) as c FROM clients")
+                    cnt = cur.fetchone()["c"]
+                    logger.error(f"🔍 Debug: Total de clientes no banco: {cnt}")
+        except Exception as db_e:
+            logger.error(f"🔍 Debug: Erro ao contar clientes no banco: {db_e}")
+
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": f"Cliente não encontrado (Token: {payload.token})",
+            },
+            status_code=404,
+        )
+
+    logger.info(
+        f"✅ Cliente identificado: {client_config.get('name')} (ID: {client_config.get('id')})"
+    )
+
+    # 2. Troca Code por Token da Meta
+    token_data = exchange_code_for_token(payload.code)
+
+    if not token_data or "access_token" not in token_data:
+        raise HTTPException(
+            status_code=400, detail="Falha ao obter Access Token da Meta"
+        )
+
+    long_lived_token = token_data.get("access_token")
+
+    # 3. Salva no Banco de Dados (tools_config -> whatsapp)
+    waba_id = payload.waba_id
+    phone_id = payload.phone_id
+
+    # Recupera config atual
+    tools_config = client_config.get("tools_config") or {}
+
+    # Atualiza apenas a sessão do WhatsApp
+    tools_config["whatsapp"] = {
+        "active": True,
+        "mode": "official",
+        "access_token": long_lived_token,
+        "waba_id": waba_id,
+        "phone_id": phone_id,
+        "app_id": os.getenv("META_APP_ID"),
+    }
+
+    # Persiste
+    success = update_tools_config_db(client_config["id"], tools_config)
+
+    if success:
+        logger.info(f"💾 Credenciais Meta salvas para cliente {client_config['id']}")
+
+        # 4. Auto-Subscribe App to WABA (Webhooks)
+        try:
+            meta_client = MetaClient(long_lived_token, phone_id)
+            subscribed = await meta_client.subscribe_app_to_waba(waba_id)
+            if subscribed:
+                logger.info(f"✅ Webhooks ativados automaticamente para WABA {waba_id}")
+            else:
+                logger.warning(
+                    f"⚠️ Falha ao ativar webhooks automaticamente para WABA {waba_id}"
+                )
+        except Exception as e:
+            logger.error(f"⚠️ Erro ao tentar auto-subscrição: {e}")
+
+        return {"status": "success", "message": "Conectado com sucesso!"}
+    else:
+        logger.error(f"❌ Falha ao salvar DB para cliente {client_config['id']}")
+        raise HTTPException(
+            status_code=500, detail="Erro ao salvar credenciais no banco"
+        )

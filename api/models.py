@@ -40,3 +40,10 @@ class LancePilotConfig(BaseModel):
 class ToolsConfigUpdate(BaseModel):
     lancepilot: Optional[LancePilotConfig] = None
     # Adicionar uazapi/kommo depois se precisar
+
+
+class OAuthCode(BaseModel):
+    code: str
+    token: str  # Token do Cliente para vincular
+    waba_id: Optional[str] = None
+    phone_id: Optional[str] = None

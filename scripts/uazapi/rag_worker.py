@@ -106,7 +106,9 @@ async def run_rag():
     try:
         # Carrega Tools Dinâmicas (passa chat_id para injeção em atendimento_humano)
         tools_list = get_enabled_tools(
-            client_config.get("tools_config"), chat_id=chat_id
+            client_config.get("tools_config"),
+            chat_id=chat_id,
+            client_config=client_config,
         )
 
         # Chama o Cérebro (OpenAI) passando as Tools (Gemini/Maps)

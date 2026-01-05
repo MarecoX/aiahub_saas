@@ -39,19 +39,23 @@ async def privacy_policy():
     # Caminho relativo considerando execução da raiz ou api/
     possible_paths = ["views/privacy_policy.html", "../views/privacy_policy.html"]
 
+    # ... (rest of privacy_policy function content if visible, or just leave it alone since we are only adding router below)
+    # Ah, I need to be careful not to delete content I can't see.
+    # It's safer to append the include_router at the end if possible, or target the import block explicitly.
+
     for path in possible_paths:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 return f.read()
+    return "<h1>Política de Privacidade</h1><p>Documento não encontrado.</p>"
 
-    return "<h1>Erro: Política de Privacidade não encontrada.</h1>"
+
+# Rotas
+app.include_router(clients.router, prefix="/api/v1/clients", tags=["Clients"])
+app.include_router(meta.router, prefix="/api/v1/meta", tags=["Meta Webhooks"])
 
 
 @app.get("/")
 async def root():
     """Rota raiz para Health Check fácil (evita 404 no browser)."""
     return {"status": "online", "service": "AIAHUB CONECT API", "docs": "/docs"}
-
-
-app.include_router(clients.router)
-app.include_router(meta.router)

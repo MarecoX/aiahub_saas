@@ -1,0 +1,92 @@
+# usado apenas no meta_manager.py
+
+import os
+import io
+import logging
+from openai import OpenAI
+from google import genai
+from google.genai import types
+
+logger = logging.getLogger("MediaUtils")
+
+# Load Keys
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    try:
+        import streamlit as st
+
+        OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        pass
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    try:
+        import streamlit as st
+
+        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        pass
+
+
+def transcribe_audio_bytes(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+    """
+    Transcreve áudio usando OpenAI Whisper.
+    Recebe bytes diretos, salva temp em memória virtual (io.BytesIO) com nome fictício.
+    """
+    if not OPENAI_API_KEY:
+        logger.error("❌ OPENAI_API_KEY faltante para transcrição.")
+        return "[Erro: Transcrição indisponível]"
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Whisper exige um objeto "arquivo" com nome.
+        # BytesIO resolve, mas precisa do atributo name.
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = filename
+
+        logger.info(f"🎙️ Transcrevendo áudio ({len(audio_bytes)} bytes)...")
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="pt",  # Force PT for better accuracy in Brazil context
+        )
+
+        text = transcript.text
+        logger.info(f"✅ Transcrição: {text[:50]}...")
+        return text
+
+    except Exception as e:
+        logger.error(f"❌ Erro na transcrição Whisper: {e}")
+        return f"[Erro na transcrição: {e}]"
+
+
+def analyze_image_bytes(image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
+    """
+    Analisa imagem usando Gemini Vision (1.5 Flash ou superior).
+    """
+    if not GEMINI_API_KEY:
+        logger.error("❌ GEMINI_API_KEY faltante para visão computacional.")
+        return "[Erro: Visão Computacional indisponível]"
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        logger.info(f"👁️ Analisando imagem ({len(image_bytes)} bytes)...")
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                "Descreva esta imagem detalhadamente para que eu possa responder ao usuário sobre ela. Se houver texto, transcreva-o integralmente.",
+            ],
+        )
+
+        text = response.text.strip()
+        logger.info(f"✅ Visão: {text[:50]}...")
+        return text
+
+    except Exception as e:
+        logger.error(f"❌ Erro na análise Gemini Vision: {e}")
+        return f"[Erro na análise de imagem: {e}]"
