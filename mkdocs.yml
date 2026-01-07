@@ -1,0 +1,44 @@
+site_name: Kestra 2.0 Docs
+site_description: Documentação Oficial do Kestra 2.0 (SaaS)
+site_author: Marcos & AI Team
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: teal
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: teal
+      accent: lime
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - loading
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Arquitetura (Backend): architecture.md
+  - Banco de Dados (PostgreSQL): database.md
+  - Frontend (Streamlit): frontend.md
+  - API Reference: api_ref.md
+  - Deployment: deployment.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true

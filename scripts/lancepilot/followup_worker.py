@@ -14,9 +14,9 @@ sys.path.append(shared_dir)
 sys.path.append(scripts_dir)  # For lancepilot.client import
 
 # Imports
-from saas_db import get_connection
-from config import REDIS_URL
-from lancepilot.client import LancePilotClient
+from saas_db import get_connection  # noqa: E402
+from config import REDIS_URL  # noqa: E402
+from lancepilot.client import LancePilotClient  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -59,7 +59,8 @@ async def check_and_run_followups():
                     ac.last_context,
                     c.tools_config,
                     c.followup_config,
-                    c.username
+                    c.username,
+                    EXTRACT(EPOCH FROM (NOW() - ac.last_message_at)) / 60 as db_diff_minutes
                 FROM active_conversations ac
                 JOIN clients c ON ac.client_id = c.id
                 WHERE ac.last_role = 'assistant'
@@ -115,11 +116,8 @@ async def check_and_run_followups():
                     "prompt", "Pergunte se o cliente precisa de ajuda."
                 )
 
-                # 5. Check Time
-                now = datetime.datetime.now()
-                if last_msg_at.tzinfo:
-                    last_msg_at = last_msg_at.replace(tzinfo=None)
-                diff_minutes = (now - last_msg_at).total_seconds() / 60
+                # 5. Check Time (Timezone Safe via SQL)
+                diff_minutes = float(row.get("db_diff_minutes") or 0)
 
                 if diff_minutes >= delay_min:
                     logger.info(
@@ -159,7 +157,7 @@ async def check_and_run_followups():
 
                     try:
                         resp_ai = client_ai.models.generate_content(
-                            model="gemini-1.5-flash", contents=analysis_prompt
+                            model="gemini-2.5-flash", contents=analysis_prompt
                         ).text.strip()
 
                         if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:

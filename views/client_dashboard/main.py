@@ -18,11 +18,8 @@ logger = logging.getLogger(__name__)
 def render_client_dashboard(user_data):
     """
     Main Entry Point for the Client Dashboard (Modularized).
+    Refactored to use Sidebar Navigation for a cleaner SaaS look.
     """
-    logger.info(
-        f"Rendering Dashboard for User ID: {user_data.get('id')} - Name: {user_data.get('name')}"
-    )
-
     # 1. Initialize Services (Gemini)
     gemini_manager = None
     try:
@@ -33,88 +30,87 @@ def render_client_dashboard(user_data):
         logger.error(f"Failed to initialize GeminiService: {e}")
         st.error(f"Erro ao inicializar IA: {e}")
 
-    # 2. Header / Logout
-    st.title(f"🤖 AIAHUB CONECT | {user_data['name']}")
-
-    # Sidebar Global Controls
+    # --- SIDEBAR NAVIGATION ---
     with st.sidebar:
+        # User Profile Header
+        st.title("🤖 AIAHUB")
+        st.caption(f"Bem-vindo, {user_data.get('name')}")
+        st.divider()
+
+        # Navigation Menu
+        # Grouped for better UX
+        st.subheader("Navegação")
+
+        selected_page = st.radio(
+            "Menu Principal",
+            [
+                "🟢 WhatsApp Oficial",
+                "📂 Meus Arquivos (RAG)",
+                "🧠 Personalidade (Prompt)",
+                "💬 Testar Assistente",
+                "🔗 Integrações",
+                "📷 WhatsApp (Legacy/QR)",
+                "⏰ Follow-up Autônomo",
+            ],
+            index=0,  # Default to WhatsApp Official as it's the main focus
+            label_visibility="collapsed",
+        )
+
+        st.divider()
+
+        # Global Controls
         st.subheader("Controles Globais")
-        # AI Toggle (Defaults to True)
-        # Toggle logic with DB persistence (Using tools_config JSONB)
+        # AI Toggle
         tools_cfg = user_data.get("tools_config", {})
         current_ai_status = tools_cfg.get("ai_active", True)
 
         new_ai_status = st.toggle(
-            "🤖 Ativar IA (Respostas Automáticas)",
+            "Respostas Automáticas (IA)",
             value=bool(current_ai_status),
         )
 
         if new_ai_status != current_ai_status:
             from scripts.shared.saas_db import update_tools_config_db
 
-            # Update JSON structure
             tools_cfg["ai_active"] = new_ai_status
-
-            # Save to DB (JSONB)
             update_tools_config_db(user_data["id"], tools_cfg)
-
-            # Update Session State
             user_data["tools_config"] = tools_cfg
             st.session_state["user_data"] = user_data
+            st.rerun()
 
-            st.toast(f"IA {'Ativada' if new_ai_status else 'Desativada'}")
-
-    col_info, col_logout = st.columns([4, 1])
-    with col_info:
-        st.caption(f"Knowledge Base ID: {user_data.get('store_id', 'Não configurado')}")
-    with col_logout:
-        if st.button("Sair"):
+        st.divider()
+        if st.button("🚪 Sair"):
             st.session_state.clear()
             st.rerun()
 
-    # 3. Main Tabs
-    (
-        tab_files,
-        tab_prompt,
-        tab_sim,
-        tab_tools,
-        tab_whatsapp_qr,
-        tab_meta_official,
-        tab_followup,
-        # tab_inbox is now inside tab_meta_official (refactored requirement)
-    ) = st.tabs(
-        [
-            "📂 Meus Arquivos (RAG)",
-            "🧠 Personalidade (Prompt)",
-            "💬 Testar Assistente",
-            "🔗 Integrações e Ferramentas",
-            "📷 WhatsApp (QR Code)",
-            "🟢 WhatsApp Oficial",
-            "⏰ Follow-up Autônomo",
-        ]
-    )
+    # --- MAIN CONTENT AREA ---
+    # Render based on selection
 
-    # 4. Render Tabs
-    with tab_files:
+    # Header Info (Store ID)
+    st.caption(f"Knowledge Base ID: {user_data.get('store_id', 'Não configurado')}")
+
+    if selected_page == "📂 Meus Arquivos (RAG)":
+        st.title("📂 Meus Arquivos")
         if gemini_manager:
             render_files_tab(user_data, gemini_manager)
         else:
-            st.warning("Serviço de IA indisponível para arquivos.")
+            st.warning("Serviço de IA indisponível.")
 
-    with tab_prompt:
+    elif selected_page == "🧠 Personalidade (Prompt)":
         render_prompt_tab(user_data)
 
-    with tab_sim:
+    elif selected_page == "💬 Testar Assistente":
         render_simulator_tab(user_data)
 
-    with tab_tools:
+    elif selected_page == "🔗 Integrações":
         render_tools_tab(user_data)
 
-    with tab_whatsapp_qr:
-        render_connection_tab(user_data)
-
-    with tab_meta_official:
+    elif selected_page == "🟢 WhatsApp Oficial":
+        # Whatsapp Tab already has its own headers/sub-tabs
         render_whatsapp_tab(user_data)
 
-    with tab_followup:
+    elif selected_page == "📷 WhatsApp (Legacy/QR)":
+        render_connection_tab(user_data)
+
+    elif selected_page == "⏰ Follow-up Autônomo":
         render_followup_tab(user_data)

@@ -15,6 +15,44 @@ from scripts.shared.saas_db import (  # noqa: E402
     get_messages,
     add_message,
 )
+from views.client_dashboard.styles.inbox_styles import get_inbox_css  # noqa: E402
+from views.client_dashboard.components.inbox_components import (  # noqa: E402
+    format_contact_label,
+    render_chat_header,
+)
+
+
+def render_live_chat(user_id, active_id):
+    # Container principal do chat (Scrollable)
+    # Altura fixa para dar sensação de App
+    with st.container(height=600, border=True):
+        history = get_messages(user_id, active_id, limit=50)
+
+        if not history:
+            st.info("Nenhuma mensagem aqui... Que tal dizer Olá? 👋")
+            return
+
+        for msg in history:
+            role = msg["role"]
+            content = msg["content"]
+
+            # Mapeamento de Avatar/Role
+            # 'user' -> Cliente (Esquerda) -> Ícone Padrão
+            # 'assistant' -> Você/IA (Direita) -> Seu Ícone
+
+            # O Streamlit `chat_message` já cuida do alinhamento visual
+            # Se role="user", alinha à esquerda.
+            # Se role="assistant", alinha à esquerda mas com ícone diferente (o Streamlit mudou isso recentemente, assistant fica na esquerda tb em alguns temas, mas é o padrão).
+            # Para forçar estética WhatsApp, teríamos que usar CSS, mas o usuário pediu "Limpe o código".
+            # O padrão `st.chat_message` é LIMPO e Funciona.
+
+            # Ícones
+            avatar_icon = "👤" if role == "user" else "🤖"
+
+            with st.chat_message(role, avatar=avatar_icon):
+                st.write(content)
+                if msg.get("created_at"):
+                    st.caption(f"{msg['created_at'].strftime('%H:%M')}")
 
 
 def render_whatsapp_tab(user_data):
@@ -352,7 +390,7 @@ def render_whatsapp_tab(user_data):
                     info = asyncio.run(mc.get_phone_number_info())
                     if info:
                         st.success(f"ONLINE: {info.get('display_phone_number')}")
-                        st.json(info)
+
                     else:
                         st.error("OFFLINE ou Token Inválido")
                 except Exception as e:
@@ -816,24 +854,28 @@ def render_whatsapp_tab(user_data):
                             st.error(f"Erro: {e}")
 
     with mt_inbox:
+        # 1. INJECT CUSTOM CSS
+        st.markdown(get_inbox_css(), unsafe_allow_html=True)
+
         st.header("📬 Inbox WhatsApp")
-        st.caption("Visualize e responda conversas em tempo real.")
 
         # Prioritize new 'whatsapp' key
         meta_cfg_inbox = user_data.get("tools_config", {}).get(
             "whatsapp", {}
         ) or user_data.get("tools_config", {}).get("whatsapp_official", {})
+
         if not meta_cfg_inbox.get("active"):
             st.warning(
                 "⚠️ Ative o WhatsApp Oficial na aba 'Configuração' para usar o Inbox."
             )
         else:
+            # 2. LAYOUT 30/70 (FIXO)
             c_list, c_chat = st.columns([1, 2.5])
 
             # --- COLUNA 1: LISTA DE CONTATOS ---
             with c_list:
                 st.subheader("Conversas")
-                if st.button("🔄 Atualizar", key="refresh_inbox"):
+                if st.button("🔄 Refresh", key="refresh_inbox"):
                     st.rerun()
 
                 conversations = get_inbox_conversations(user_data["id"])
@@ -841,15 +883,19 @@ def render_whatsapp_tab(user_data):
                 if not conversations:
                     st.info("Nenhuma conversa recente.")
 
+                # Renderiza Lista como 'Cards'
                 for conv in conversations:
                     chat_id = conv["chat_id"]
-                    # Tenta formatar bonito (Data ou Status)
-                    label = f"📱 {chat_id}"
-                    if conv.get("last_role") == "user":
-                        label += " 🔴"  # Cliente falou por ultimo
-                    else:
-                        label += " 🟢"
 
+                    # Usa componente modular para formatar o label
+                    label = format_contact_label(
+                        chat_id,
+                        conv.get("last_message_at"),
+                        conv.get("last_role"),
+                        conv.get("last_context"),  # Passamos context para preview
+                    )
+
+                    # Botão estilo Card
                     if st.button(
                         label, key=f"chat_btn_{chat_id}", use_container_width=True
                     ):
@@ -861,52 +907,79 @@ def render_whatsapp_tab(user_data):
                 active_id = st.session_state.get("active_chat_id")
 
                 if not active_id:
-                    st.info("👈 Selecione uma conversa na esquerda.")
+                    st.info("👈 Selecione uma conversa para responder.")
                 else:
-                    st.markdown(f"**Conversando com:** `{active_id}`")
-                    st.divider()
+                    st.markdown(get_inbox_css(), unsafe_allow_html=True)
+                    render_chat_header(active_id)
 
-                    # Container para rolagem (Streamlit nativo ja rola)
-                    chat_container = st.container()
+                    # Layout limpo: Botão de Refresh discreto no topo ou apenas confiar na interação
+                    # Vamos adicionar um botão de refresh simples e funcional
+                    if st.button(
+                        "🔄 Carregar Novas Mensagens",
+                        use_container_width=True,
+                        type="secondary",
+                    ):
+                        st.rerun()
 
-                    with chat_container:
-                        history = get_messages(user_data["id"], active_id, limit=50)
+                    # Render Chat
+                    render_live_chat(user_data["id"], active_id)
 
-                        if not history:
-                            st.caption("Nenhum histórico encontrado.")
-
-                        for msg in history:
-                            role = msg["role"]
-                            content = msg["content"]
-
-                            with st.chat_message(role):
-                                st.markdown(content)
-                                st.caption(
-                                    f"{msg['created_at'].strftime('%H:%M')} - {role}"
-                                )
-
-                    # INPUT AREA
+                    # INPUT AREA (Fixo na base via fluxo normal do Streamlit)
                     if prompt := st.chat_input("Digite sua resposta..."):
-                        # 1. Enviar via Meta API
                         with st.spinner("Enviando..."):
                             try:
                                 from scripts.meta.meta_client import MetaClient
 
-                                mc = MetaClient(
-                                    meta_cfg_inbox.get("access_token")
-                                    or meta_cfg_inbox.get("token"),
-                                    meta_cfg_inbox["phone_id"],
+                                # Access Token handling
+                                tools = user_data.get("tools_config", {})
+                                waba = tools.get("whatsapp", {}) or tools.get(
+                                    "whatsapp_official", {}
                                 )
-                                # Envia texto
-                                asyncio.run(mc.send_message_text(active_id, prompt))
+                                token = waba.get("access_token") or waba.get("token")
+                                phone_id = waba.get("phone_id")
 
-                                # 2. Salvar no Banco (Assistant)
-                                add_message(
-                                    client_id=user_data["id"],
-                                    chat_id=active_id,
-                                    role="assistant",
-                                    content=prompt,
-                                )
-                                st.rerun()  # Atualiza UI
+                                if not token or not phone_id:
+                                    st.error("Erro: Credenciais Meta não encontradas.")
+                                else:
+                                    # 1. Enviar
+                                    mc = MetaClient(token, phone_id)
+                                    asyncio.run(mc.send_message_text(active_id, prompt))
+
+                                    # 2. Salvar (Assistant)
+                                    add_message(
+                                        user_data["id"], active_id, "assistant", prompt
+                                    )
+
+                                    # 3. Pause Logic
+                                    try:
+                                        import redis
+
+                                        redis_url = (
+                                            user_data.get("redis_url")
+                                            or os.getenv("REDIS_URL")
+                                            or "redis://localhost:6379"
+                                        )
+                                        r = redis.Redis.from_url(
+                                            redis_url, decode_responses=True
+                                        )
+                                        pause_seconds = user_data.get(
+                                            "human_attendant_timeout", 3600
+                                        )
+                                        r.setex(
+                                            f"ai_paused:{active_id}",
+                                            pause_seconds,
+                                            "true",
+                                        )
+                                        r.close()
+                                        st.toast(
+                                            f"⏸️ IA Pausada por {int(pause_seconds / 60)} min."
+                                        )
+                                    except Exception as e:
+                                        st.warning(f"Erro Redis: {e}")
+
+                                    st.rerun()
+
                             except Exception as e:
                                 st.error(f"Erro ao enviar: {e}")
+
+                    # --- AUTO-REFRESH LOGIC (Final do Render) ---

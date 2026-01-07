@@ -17,6 +17,8 @@ services:
       - ADMIN_API_SECRET=${ADMIN_API_SECRET}
       - META_APP_ID=${META_APP_ID}
       - META_APP_SECRET=${META_APP_SECRET}
+
+
     deploy:
       mode: replicated
       replicas: 1
@@ -42,6 +44,7 @@ services:
     environment:
       - DATABASE_CONNECTION_URI=${DATABASE_CONNECTION_URI}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - REDIS_URL=redis://redis:6379
     deploy:
       mode: replicated
       replicas: 1
@@ -57,9 +60,47 @@ services:
         - "traefik.http.services.kestra_dashboard.loadbalancer.server.port=8501"
         - "traefik.http.services.kestra_dashboard.loadbalancer.sticky.cookie=true"
         - "traefik.http.middlewares.force-https.headers.customrequestheaders.X-Forwarded-Proto=https"
+        - "traefik.http.services.kestra_dashboard.loadbalancer.sticky.cookie=true"
+        - "traefik.http.middlewares.force-https.headers.customrequestheaders.X-Forwarded-Proto=https"
         - "traefik.http.routers.kestra_dashboard.middlewares=force-https"
+
+  # Serviço Redis (Cache & Debounce)
+  redis:
+    image: redis:alpine
+    restart: always
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - network_public
+    deploy:
+      mode: replicated
+      replicas: 1
+
+  # Serviço de Documentação (Sênior Docs)
+  docs:
+    image: squidfunk/mkdocs-material
+    restart: always
+    ports:
+      - "8008:8000"
+    volumes:
+      - ./:/docs
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.kestra_docs.rule=Host(`docs.aiahub.com.br`)"
+        - "traefik.http.routers.kestra_docs.entrypoints=websecure"
+        - "traefik.http.routers.kestra_docs.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.kestra_docs.loadbalancer.server.port=8000"
 
 networks:
   network_public:
     name: network_public
     external: true
+
+volumes:
+  redis_data:

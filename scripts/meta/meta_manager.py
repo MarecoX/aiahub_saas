@@ -1,5 +1,8 @@
 import logging
 from typing import Dict, Any, Optional
+import asyncio
+import os
+import redis
 
 from scripts.shared.saas_db import (
     get_client_config,
@@ -8,10 +11,7 @@ from scripts.shared.saas_db import (
 )
 from scripts.shared.chains_saas import ask_saas
 from scripts.meta.meta_client import MetaClient
-from scripts.shared.chains_saas import ask_saas
-from scripts.meta.meta_client import MetaClient
-from scripts.shared.media_utils import transcribe_audio_bytes, analyze_image_bytes
-import redis
+from scripts.shared.media_utils import transcribe_audio_bytes
 from scripts.shared.tools_library import get_enabled_tools
 
 logger = logging.getLogger(__name__)
@@ -43,192 +43,155 @@ async def process_incoming_webhook(data: Dict[str, Any]):
             for change in changes:
                 value = change.get("value", {})
 
-                # Check messages
                 if "messages" not in value:
                     continue
 
                 metadata = value.get("metadata", {})
                 phone_id_from_webhook = metadata.get("phone_number_id")
 
-                # BUSCA CLIENTE PELO PHONE ID
+                # BUSCA CLIENTE
                 client_token = get_client_token_by_waba_phone(phone_id_from_webhook)
-
                 if not client_token:
                     logger.warning(
-                        f"⚠️ Mensagem recebida de PhoneID desconhecido: {phone_id_from_webhook}"
+                        f"⚠️ Mensagem de PhoneID desconhecido: {phone_id_from_webhook}"
                     )
                     continue
 
-                # Carrega Config Completa do Cliente
+                # CONFIG
                 client_config = get_client_config(client_token)
                 if not client_config:
                     continue
 
-                # Extrai Credenciais WABA do tools_config do cliente
                 tools = client_config.get("tools_config", {})
-
-                # Check priority: 'whatsapp' (new) > 'whatsapp_official' (legacy)
-                waba_cfg = tools.get("whatsapp", {})
-                if not waba_cfg.get("active") and not waba_cfg.get("token"):
-                    waba_cfg = tools.get("whatsapp_official", {})
-
-                # Validação de Segurança
+                waba_cfg = tools.get("whatsapp", {}) or tools.get(
+                    "whatsapp_official", {}
+                )
                 if not waba_cfg.get("active"):
-                    logger.info(
-                        f"⏸️ Integração Meta Desativada para cliente {client_config['name']}"
-                    )
                     continue
 
-                access_token = waba_cfg.get("access_token") or waba_cfg.get(
-                    "token"
-                )  # Token do System User
-
-                # Instancia Cliente Graph API
+                access_token = waba_cfg.get("access_token") or waba_cfg.get("token")
                 meta = MetaClient(access_token, phone_id_from_webhook)
 
-                # Processa Mensagens
+                # MESSAGES
                 messages = value.get("messages", [])
                 for msg in messages:
                     msg_type = msg.get("type")
-                    from_phone = msg.get("from")  # Número do Cliente Final
+                    from_phone = msg.get("from")
 
-                    # --- CHECK HUMAN PAUSE (REDIS) ---
-                    # Verifica se o atendimento foi pausado para humano
+                    logger.info(f"📩 Webhook Meta de {from_phone} ({msg_type})")
+
+                    # EXTRACT CONTENT
+                    user_text = ""
+                    if msg_type == "text":
+                        user_text = msg.get("text", {}).get("body", "")
+                    elif msg_type == "audio":
+                        media_id = msg.get("audio", {}).get("id")
+                        audio_bytes = await meta.download_media_bytes(
+                            await meta.get_media_url(media_id)
+                        )
+                        if audio_bytes:
+                            user_text = (
+                                transcribe_audio_bytes(audio_bytes, "whisper-1") or ""
+                            )
+                            user_text += "\n[Áudio Transcrito]"
+                    elif msg_type == "image":
+                        caption = msg.get("image", {}).get("caption", "")
+                        user_text = caption or "[Imagem recebida]"
+
+                    if not user_text:
+                        continue
+
+                    # REDIS CONNECTION
+                    redis_conn = None
                     try:
                         redis_url = (
-                            client_config.get("redis_url") or "redis://localhost:6379"
+                            client_config.get("redis_url")
+                            or os.getenv("REDIS_URL")
+                            or "redis://localhost:6379"
                         )
-                        r = redis.Redis.from_url(redis_url, decode_responses=True)
-                        pause_key = f"ai_paused:{from_phone}"
-                        if r.get(pause_key):
-                            logger.info(
-                                f"🛑 Chat {from_phone} pausado por humano. Ignorando mensagem."
-                            )
-                            r.close()
-                            continue
-                        r.close()
+                        redis_conn = redis.Redis.from_url(
+                            redis_url, decode_responses=True
+                        )
                     except Exception as e:
-                        logger.error(f"Erro ao checar Redis Pause: {e}")
-                    # ---------------------------------
+                        logger.error(f"Redis Error: {e}")
 
-                    # --- INBOX LOGGING (USER) ---
-                    msg_content = ""
-                    media_url = None
-                    if msg_type == "text":
-                        msg_content = msg["text"]["body"]
-                    elif msg_type == "image":
-                        msg_content = msg.get("image", {}).get("caption", "[Imagem]")
-                    elif msg_type == "audio":
-                        msg_content = "[Áudio]"
-                    else:
-                        msg_content = f"[{msg_type.upper()}]"
+                    # COMMANDS (Admin/Control)
+                    msg_lower = user_text.strip().lower()
+                    if msg_lower in ["#reset", "#ativar", "#stop", "#pausa"]:
+                        if redis_conn:
+                            if msg_lower == "#reset":
+                                redis_conn.delete(f"ai_paused:{from_phone}")
+                                redis_conn.delete(f"buffer:meta:{from_phone}")
+                                await meta.send_message_text(
+                                    from_phone, "🔄 Conversa reiniciada e IA ativa."
+                                )
+                                continue
 
-                    add_message(
-                        client_id=client_config["id"],
-                        chat_id=from_phone,
-                        role="user",
-                        content=msg_content,
-                        media_url=media_url,
-                    )
-                    # -----------------------------
+                            elif msg_lower == "#ativar":
+                                redis_conn.delete(f"ai_paused:{from_phone}")
+                                await meta.send_message_text(
+                                    from_phone, "✅ IA Reativada."
+                                )
+                                continue
 
-                    # -----------------------------
+                            elif msg_lower in ["#stop", "#pausa"]:
+                                redis_conn.setex(
+                                    f"ai_paused:{from_phone}", 86400, "true"
+                                )
+                                await meta.send_message_text(
+                                    from_phone, "🛑 IA Pausada (Modo Humano)."
+                                )
+                                continue
 
-                    # LÓGICA DE UNIFICAÇÃO DE TEXTO (Multimodal)
-                    user_text = None
-
-                    if msg_type == "text":
-                        user_text = msg_content
-
-                    elif msg_type == "audio":
-                        audio_data = msg.get("audio", {})
-                        media_id = audio_data.get("id")
-                        mime_type = audio_data.get("mime_type", "audio/ogg")
-
-                        logger.info(f"🎙️ WABA Áudio de {from_phone} | ID: {media_id}")
-
-                        # Download & Transcribe
+                    # DEBOUNCE LOGIC
+                    final_text = user_text
+                    if redis_conn:
                         try:
-                            media_url = await meta.get_media_url(media_id)
-                            if media_url:
-                                audio_bytes = await meta.download_media_bytes(media_url)
-                                if audio_bytes:
-                                    transcription = transcribe_audio_bytes(audio_bytes)
-                                    user_text = f"[ÁUDIO DO USUÁRIO]: {transcription}"
-                        except Exception as e:
-                            logger.error(f"❌ Falha ao processar áudio: {e}")
-                            user_text = "[Áudio enviado, mas erro na transcrição]"
+                            buffer_key = f"buffer:meta:{from_phone}"
+                            redis_conn.rpush(buffer_key, user_text)
+                            await asyncio.sleep(2.0)
 
-                    elif msg_type == "image":
-                        image_data = msg.get("image", {})
-                        media_id = image_data.get("id")
-                        mime_type = image_data.get("mime_type", "image/jpeg")
-                        caption = image_data.get("caption", "")
+                            pipe = redis_conn.pipeline()
+                            pipe.lrange(buffer_key, 0, -1)
+                            pipe.delete(buffer_key)
+                            results = pipe.execute()
+                            buffered = results[0]
 
-                        logger.info(f"📸 WABA Imagem de {from_phone} | ID: {media_id}")
-
-                        # Download & Analyze
-                        try:
-                            media_url = await meta.get_media_url(media_id)
-                            if media_url:
-                                image_bytes = await meta.download_media_bytes(media_url)
-                                if image_bytes:
-                                    description = analyze_image_bytes(
-                                        image_bytes, mime_type
-                                    )
-                                    user_text = f"[IMAGEM ENVIADA]:\nDescrição Visual: {description}"
-                                    if caption:
-                                        user_text += f"\nLegenda do Usuário: {caption}"
-                        except Exception as e:
-                            logger.error(f"❌ Falha ao processar imagem: {e}")
-                            user_text = (
-                                f"[Imagem enviada: {caption}]"
-                                if caption
-                                else "[Imagem enviada]"
+                            if not buffered:
+                                continue
+                            final_text = "\n".join(buffered)
+                            logger.info(
+                                f"📨 Processando lote de {len(buffered)} msgs de {from_phone}"
                             )
+                        except Exception as e:
+                            logger.error(f"Buffer Error: {e}")
+                            final_text = user_text
 
-                    # PROCESSAMENTO FINAL (SE HOUVER TEXTO OU CONTEXTO MULTIMODAL)
-                    if user_text:
-                        logger.info(
-                            f"📩 WABA Processando de {from_phone}: {user_text[:100]}..."
-                        )
+                    # CHECK HUMAN PAUSE
+                    if redis_conn and redis_conn.exists(f"ai_paused:{from_phone}"):
+                        logger.info(f"🛑 Chat {from_phone} pausado. Salvando apenas.")
+                        add_message(client_config["id"], from_phone, "user", final_text)
+                        continue
 
-                        # PREPARE TOOLS
-                        tools_list = get_enabled_tools(
-                            tools_config=tools.get("functions", {}),
-                            chat_id=from_phone,
-                            client_config=client_config,
-                        )
+                    # CALL AI
+                    tools_list = get_enabled_tools(
+                        tools, chat_id=from_phone, client_config=client_config
+                    )
+                    response_text = await ask_saas(
+                        query=final_text,
+                        chat_id=from_phone,
+                        system_prompt=client_config["system_prompt"],
+                        client_config=client_config,
+                        tools_list=tools_list,
+                    )
 
-                        # CHAMA O AGENTE IA
-                        response_text = await ask_saas(
-                            query=user_text,
-                            chat_id=from_phone,
-                            system_prompt=client_config["system_prompt"],
-                            client_config=client_config,
-                            tools_list=tools_list,
-                        )
-
-                        # Envia Resposta
+                    if response_text:
                         await meta.send_message_text(from_phone, response_text)
-
-                        # --- INBOX LOGGING (ASSISTANT) ---
+                        add_message(client_config["id"], from_phone, "user", final_text)
                         add_message(
-                            client_id=client_config["id"],
-                            chat_id=from_phone,
-                            role="assistant",
-                            content=response_text,
-                        )
-                        # ---------------------------------
-                        resp = f"🎤 Recebi seu áudio! (ID: {media_id})"
-                        await meta.send_message_text(from_phone, resp)
-
-                        add_message(client_config["id"], from_phone, "assistant", resp)
-
-                    else:
-                        logger.info(
-                            f"Tipo de mensagem não suportado por enquanto: {msg_type}"
+                            client_config["id"], from_phone, "assistant", response_text
                         )
 
     except Exception as e:
-        logger.error(f"❌ Erro crítico no processamento Meta: {e}", exc_info=True)
+        logger.error(f"❌ Erro Webhook Meta: {e}", exc_info=True)
+        return {"status": "error"}

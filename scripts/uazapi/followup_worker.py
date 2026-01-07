@@ -1,10 +1,12 @@
 import os
 import sys
 import logging
-import datetime
+import json
 import asyncio
+import datetime
 import redis.asyncio as redis
 from google import genai
+from psycopg.rows import dict_row
 
 # Add path to import local modules (shared directory)
 sys.path.append(
@@ -24,7 +26,10 @@ logger = logging.getLogger("FollowUpWorker")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = None
 if GEMINI_API_KEY:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        logger.error(f"Erro ao inicializar Gemini Client: {e}")
 
 
 async def check_is_paused(chat_id):
@@ -49,9 +54,6 @@ async def analyze_context(chat_id, instruction):
             logger.error("Gemini Client not configured (Missing API Key).")
             return False, None
 
-        # Simplificação v1: Apenas gerar a mensagem seguindo a instrução.
-        # Por enquanto, vamos focar na Geração Inteligente.
-
         prompt = f"""
         Você é um assistente virtual profissional.
         O cliente parou de responder faz um tempo.
@@ -65,9 +67,9 @@ async def analyze_context(chat_id, instruction):
         3. Gere APENAS o texto da mensagem.
         """
 
-        # V2 SDK call
+        # Usando gemini-2.5-flash como validado
         response = client.models.generate_content(
-            model="gemini-1.5-flash", contents=prompt
+            model="gemini-2.5-flash", contents=prompt
         )
 
         text = response.text.strip()
@@ -79,11 +81,14 @@ async def analyze_context(chat_id, instruction):
 
 
 async def check_and_run_followups():
-    logger.info("🔍 Checking for stalled conversations (UAZAPI)...")
+    logger.info("🔍 Checking for stalled conversations (Refactored)...")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # Join active_conversations with clients
+            logger.info("🕵️ Executing DB Query for candidates...")
+
+            # Adicionado c.tools_config para checar se é Meta/LancePilot
+            # Adicionado c.api_url para override de Uazapi
             cur.execute("""
                 SELECT 
                     ac.chat_id, 
@@ -94,7 +99,10 @@ async def check_and_run_followups():
                     ac.last_context,
                     c.followup_config,
                     c.tools_config,
-                    c.username
+                    c.username,
+                    c.api_url,
+                    c.token as client_token,
+                    EXTRACT(EPOCH FROM (NOW() - ac.last_message_at)) / 60 as db_diff_minutes
                 FROM active_conversations ac
                 JOIN clients c ON ac.client_id = c.id
                 WHERE ac.last_role = 'assistant'
@@ -102,7 +110,7 @@ async def check_and_run_followups():
             """)
 
             rows = cur.fetchall()
-            logger.info(f"📊 Rows found: {len(rows)}")
+            logger.info(f"📊 Rows found (Active Assistant): {len(rows)}")
 
             for row in rows:
                 chat_id = row["chat_id"]
@@ -113,21 +121,24 @@ async def check_and_run_followups():
                 last_context_txt = row.get("last_context") or ""
                 tools_config_json = row.get("tools_config") or {}
 
-                # ----------------------------------------------------
-                # SEPARATION OF CONCERNS:
-                # Se este cliente usa Meta Oficial Ativo, este worker DEVE IGNORAR.
-                # Quem cuida dele é o meta_followup_worker.py
-                # ----------------------------------------------------
-                # ----------------------------------------------------
+                # --- SAFETY CHECKS (Separation of Concerns) ---
                 meta_cfg = tools_config_json.get("whatsapp", {})
                 meta_legacy = tools_config_json.get("whatsapp_official", {})
                 lp_cfg = tools_config_json.get("lancepilot", {})
 
-                # IGNORA SE FOR META OU LANCEPILOT
+                # Se usa Meta Oficial ou LancePilot, este worker IGNORA.
                 if meta_cfg.get("active") or meta_legacy.get("active"):
                     continue
                 if lp_cfg.get("active"):
                     continue
+                # -----------------------------------------------
+
+                # --- DEBUG CHECK ---
+                target_chat_id = os.getenv("DEBUG_CHAT_ID")
+                if target_chat_id and str(target_chat_id).strip() not in str(chat_id):
+                    # Se tiver filtro e não for esse chat, pula silenciosamente
+                    continue
+                # -------------------
 
                 # Check Active Flag via Python
                 is_active = config.get("active")
@@ -151,65 +162,97 @@ async def check_and_run_followups():
                     "prompt", "Pergunte se o cliente precisa de ajuda."
                 )
 
-                # Check Time
-                now = datetime.datetime.now()
-                if last_msg_at.tzinfo:
-                    last_msg_at = last_msg_at.replace(tzinfo=None)
-                diff_minutes = (now - last_msg_at).total_seconds() / 60
+                # Check Time (Timezone Safe via SQL)
+                diff_minutes = float(row.get("db_diff_minutes") or 0)
 
                 if diff_minutes >= delay_min:
-                    # Logic Generation... (Simplified for restore)
+                    logger.info(
+                        f"🚀 Triggering Follow-up Stage {current_stage_idx + 1} for {chat_id} | Diff: {diff_minutes:.1f}m >= Limit: {delay_min}m"
+                    )
+                else:
+                    # Log Opcional para Debug (pode ficar verboso, mas útil agora)
+                    # logger.info(f"⏳ Waiting {chat_id}: {diff_minutes:.1f}m / {delay_min}m")
+                    pass
+
+                if diff_minutes >= delay_min:
+                    analysis_prompt = f"""
+                    Você é um especialista em atendimento. Analise a conversa abaixo.
+                    
+                    Histórico Recente:
+                    Last Context: "{last_context_txt[-2000:]}"
+                    (Obs: Pode estar truncado)
+
+                    Instrução de Retomada: "{prompt_behavior}"
+
+                    DECISÃO:
+                    1. Se o cliente já encerrou, agradeceu, ou disse que não quer mais nada -> Responda APENAS: "FINISHED"
+                    2. Se o contexto pede retomada -> Responda com a mensagem de texto para enviar ao cliente.
+                    """
+
                     try:
-                        analysis_prompt = f"""
-                        Você é um especialista em atendimento. Analise a conversa abaixo.
-                        
-                        Histórico Recente:
-                        Last Context: "{last_context_txt[-2000:]}"
-                        
-                        Instrução de Retomada: "{prompt_behavior}"
+                        if not client:
+                            logger.error("Gemini Client Unreachable for Analysis")
+                            continue
 
-                        DECISÃO:
-                        1. Se o cliente já encerrou/agradeceu -> Responda APENAS: "FINISHED"
-                        2. Se pode retomar -> Responda com a mensagem de texto.
-                        """
-                        if client:
-                            resp_ai = client.models.generate_content(
-                                model="gemini-2.5-flash", contents=analysis_prompt
-                            ).text.strip()
+                        resp_ai = client.models.generate_content(
+                            model="gemini-2.5-flash", contents=analysis_prompt
+                        ).text.strip()
 
-                            if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
-                                # Smart Termination
-                                logger.info(
-                                    f"🛑 Smart Termination for {chat_id} (UAZAPI)"
-                                )
-                                cur.execute(
-                                    """
-                                    UPDATE active_conversations SET status = 'finished' 
-                                    WHERE chat_id = %s AND client_id = %s
-                                """,
-                                    (chat_id, client_id),
-                                )
-                                conn.commit()
-                            else:
-                                # UAZAPI SPECIFIC SEND
-                                await send_whatsapp_message(chat_id, resp_ai)
-                                logger.info(
-                                    f"✅ [UAZAPI] Sent Stage {current_stage_idx + 1} to {chat_id}"
-                                )
+                        if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
+                            # Smart Termination
+                            logger.info(
+                                f"🛑 Smart Termination for {chat_id}: Context indicates finished."
+                            )
+                            cur.execute(
+                                """
+                                UPDATE active_conversations SET status = 'finished' 
+                                WHERE chat_id = %s AND client_id = %s
+                            """,
+                                (chat_id, client_id),
+                            )
+                            conn.commit()
+                        else:
+                            # --- DYNAMIC API CONFIG ---
+                            # Tenta pegar config específica de Uazapi do tools_config
+                            uazapi_cfg = tools_config_json.get("uazapi", {})
+                            custom_url = uazapi_cfg.get("url") or row.get("api_url")
+                            # FIX: Prioridade -> Tools Config > Token da Coluna > Env Var (dentro da lib)
+                            custom_key = uazapi_cfg.get("api_key") or row.get(
+                                "client_token"
+                            )
 
-                                cur.execute(
-                                    """
-                                    UPDATE active_conversations 
-                                    SET last_message_at = NOW(),
-                                        followup_stage = %s
-                                    WHERE chat_id = %s AND client_id = %s
-                                """,
-                                    (current_stage_idx + 1, chat_id, client_id),
-                                )
-                                conn.commit()
+                            # Fallback para Env Vars é tratado dentro de uazapi_saas.py se passarmos None
+                            # Mas se custom_url for passado, ele usa.
+
+                            # Send Message
+                            await send_whatsapp_message(
+                                chat_id,
+                                resp_ai,
+                                api_key=custom_key,
+                                base_url=custom_url,
+                            )
+
+                            logger.info(
+                                f"✅ Sent Stage {current_stage_idx + 1} to {chat_id}"
+                            )
+
+                            cur.execute(
+                                """
+                                UPDATE active_conversations 
+                                SET last_message_at = NOW(),
+                                    followup_stage = %s
+                                WHERE chat_id = %s AND client_id = %s
+                            """,
+                                (current_stage_idx + 1, chat_id, client_id),
+                            )
+                            conn.commit()
 
                     except Exception as e:
-                        logger.error(f"Erro AI Generation: {e}")
+                        error_msg = str(e)
+                        if hasattr(e, "response") and e.response is not None:
+                            error_msg += f" | Status: {e.response.status_code} | Body: {e.response.text}"
+
+                        logger.error(f"Erro durante FollowUp (Gen/Send): {error_msg}")
 
 
 if __name__ == "__main__":

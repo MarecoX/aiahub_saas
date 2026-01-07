@@ -186,7 +186,24 @@ def render_tools_tab(user_data):
 
     st.divider()
 
-    # --- Enviar Relatório ---
+    # --- Consulta CEP ---
+    st.subheader("📍 Consulta CEP (Correios/ViaCEP)")
+    cep_cfg = t_config.get("consultar_cep", {})
+    if isinstance(cep_cfg, bool):
+        cep_cfg = {"active": cep_cfg}
+
+    c_cep_active = st.toggle(
+        "Ativar Consulta de CEP",
+        value=cep_cfg.get("active", False),
+        help="Permite que a IA consulte endereços automaticamente a partir do CEP informado pelo cliente.",
+    )
+
+    if c_cep_active:
+        st.caption(
+            "Esta integração utiliza serviços públicos (ViaCEP/BrasilAPI). Nenhuma configuração extra é necessária."
+        )
+
+    st.divider()
     st.subheader("📤 Enviar Relatório para Grupo")
     relatorio_cfg = t_config.get("enviar_relatorio", {})
     if isinstance(relatorio_cfg, bool):
@@ -269,6 +286,8 @@ def render_tools_tab(user_data):
             "access_token": b_access if c_betel_active else "",
             "secret_token": b_secret if c_betel_active else "",
         }
+        # Save CEP
+        new_tools_config["consultar_cep"] = {"active": c_cep_active}
         # Save Enviar Relatório
         new_tools_config["enviar_relatorio"] = {
             "active": c_relatorio_active,

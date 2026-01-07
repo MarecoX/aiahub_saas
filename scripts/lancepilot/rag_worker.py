@@ -13,7 +13,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 shared_dir = os.path.join(os.path.dirname(current_dir), "shared")
 sys.path.append(shared_dir)
 
-from config import REDIS_URL, BUFFER_KEY_SUFIX
+from config import REDIS_URL, BUFFER_KEY_SUFIX  # noqa: E402
 from saas_db import get_client_config, get_connection  # noqa: E402
 from tools_library import get_enabled_tools  # noqa: E402
 

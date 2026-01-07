@@ -39,7 +39,15 @@ class LancePilotConfig(BaseModel):
 
 class ToolsConfigUpdate(BaseModel):
     lancepilot: Optional[LancePilotConfig] = None
-    # Adicionar uazapi/kommo depois se precisar
+    # Generic Tools
+    consultar_cep: Optional[bool] = None
+    atendimento_humano: Optional[dict] = None  # {"active": true, "timeout_minutes": 60}
+
+    # Follow-Up (Loop)
+    followup: Optional[dict] = None  # {"active": true, "interval_hours": 24}
+
+    # Custom (Make-like)
+    custom_tools: Optional[list] = None  # List of JSON Tool Definitions
 
 
 class OAuthCode(BaseModel):

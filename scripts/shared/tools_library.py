@@ -1,16 +1,15 @@
 import os
 import httpx
 import logging
+from typing import Optional
+from pydantic import BaseModel, Field
 from langchain.tools import tool
 from langchain_core.tools import StructuredTool
 
-
 logger = logging.getLogger("KestraTools")
-
 # Tenta pegar API Key do Maps, ou fallback pro Gemini (se for a mesma key irrestrita)
 # Obtém chave específica do Maps. SEM fallback para Gemini para evitar erros de permissão.
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
-
 if GOOGLE_MAPS_API_KEY:
     logger.info(f"🗺️ Google Maps Key carregada: ...{GOOGLE_MAPS_API_KEY[-4:]}")
 else:
@@ -23,42 +22,34 @@ else:
 def consultar_cep(cep: str):
     """
     Consulta o endereço de um CEP brasileiro usando Google Maps Geocoding API.
-
     Args:
         cep (str): O CEP a ser consultado (ex: 01001000 ou 01001-000).
     """
     if not GOOGLE_MAPS_API_KEY:
         return {"error": "API Key de Mapas não configurada."}
-
     # Limpa o CEP
     clean_cep = cep.replace("-", "").replace(".", "").strip()
-
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {
         "components": f"postal_code:{clean_cep}|country:BR",
         "key": GOOGLE_MAPS_API_KEY,
     }
-
     try:
         # EXECUÇÃO SÍNCRONA (Segura para ThreadPool)
         with httpx.Client() as client:
             resp = client.get(url, params=params, timeout=10.0)
             data = resp.json()
-
             # Log de Debug Profundo
             logger.info(
                 f"🗺️ Maps API Status: {data.get('status')} | Results: {len(data.get('results', []))}"
             )
-
             if data["status"] != "OK":
                 logger.error(f"❌ Erro Maps API: {data}")
                 return {"error": f"Google Maps Error: {data['status']}"}
-
             if not data["results"]:
                 return {
                     "error": "CEP não encontrado (ZERO_RESULTS). Verifique o número."
                 }
-
             # Simplifica a resposta para o LLM não se perder
             result = data["results"][0]
             # logger.info(f"💬 Query do Usuário: {result}")
@@ -66,7 +57,6 @@ def consultar_cep(cep: str):
                 "formatted_address", "Endereço não formatado"
             )
             location = result.get("geometry", {}).get("location", {})
-
             components = {}
             for comp in result.get("address_components", []):
                 types = comp.get("types", [])
@@ -78,7 +68,6 @@ def consultar_cep(cep: str):
                     components["cidade"] = comp["long_name"]
                 elif "administrative_area_level_1" in types:
                     components["estado"] = comp["short_name"]
-
             final_payload = {
                 "cep": clean_cep,
                 "endereco": formatted_address,
@@ -88,7 +77,6 @@ def consultar_cep(cep: str):
             }
             logger.info(f"✅ Retornando para o Agente: {final_payload}")
             return final_payload
-
     except Exception as e:
         logger.error(f"Erro no consultar_cep: {e}")
         return {"error": str(e)}
@@ -100,7 +88,6 @@ def qualificado_kommo_provedor(
 ):
     """
     Registra um lead qualificado movendo-o para a etapa correta no Kommo CRM.
-
     Args:
         nome (str): Nome do cliente
         telefone (str): Telefone
@@ -110,17 +97,13 @@ def qualificado_kommo_provedor(
         return {
             "error": "Configuração do Kommo CRM não encontrada (kommo_config is None)."
         }
-
     base_url = kommo_config.get("url")
     auth_header = {"Authorization": kommo_config.get("token")}
     pipeline_id = kommo_config.get("pipeline_id")
     status_id = kommo_config.get("status_id")  # Status ID de "Lead Qualificado"
-
     if not base_url or not auth_header["Authorization"]:
         return {"error": "URL ou Token do Kommo não configurados."}
-
     logger.info(f"🚀 Iniciando Qualificação Kommo para {nome} - {telefone}")
-
     try:
         with httpx.Client() as client:
             # 1. Buscar Contact ID pelo Telefone
@@ -128,13 +111,11 @@ def qualificado_kommo_provedor(
             clean_phone = (
                 telefone.replace("+", "").replace("-", "").replace(" ", "").strip()
             )
-
             # --- FIX: Formatação BR (Adiciona 55 se vier apenas DDD + Numero) ---
             # Ex: 61981287914 (11 digitos) -> 5561981287914
             if clean_phone.isdigit() and len(clean_phone) in [10, 11]:
                 clean_phone = f"55{clean_phone}"
                 logger.info(f"🇧🇷 Telefone formatado para BR: {clean_phone}")
-
             search_url = f"{base_url}/api/v4/contacts"
             # Adicionado 'with=leads' para garantir que venham os leads associados
             resp_search = client.get(
@@ -142,38 +123,30 @@ def qualificado_kommo_provedor(
                 params={"query": clean_phone, "with": "leads"},
                 headers=auth_header,
             )
-
             if resp_search.status_code != 200:
                 logger.error(f"Erro Busca Kommo: {resp_search.text}")
                 return {"error": f"Erro ao buscar contato: {resp_search.status_code}"}
-
             data_search = resp_search.json()
             contacts = data_search.get("_embedded", {}).get("contacts", [])
-
             lead_id = None
-
             if not contacts:
                 # Se não achou contato, poderíamos criar tudo do zero, mas por segurança retornamos erro orientativo
                 # Ou poderíamos criar Contato + Lead. Vamos manter erro por enquanto para não duplicar se formatacao estiver errada.
                 return {
                     "error": "Contato não encontrado no CRM pelo telefone fornecido."
                 }
-
             contact = contacts[0]
             contact_id = contact["id"]
             leads = contact.get("_embedded", {}).get("leads", [])
-
             if leads:
                 # Pega o primeiro lead (assumindo ser o ativo/mais recente)
                 lead_id = leads[0]["id"]
                 logger.info(f"Lead existente encontrado: {lead_id}")
-
                 # Atualizar Status (PATCH)
                 patch_url = f"{base_url}/api/v4/leads"
                 payload_item = {"id": int(lead_id), "status_id": int(status_id)}
                 if pipeline_id:
                     payload_item["pipeline_id"] = int(pipeline_id)
-
                 resp_patch = client.patch(
                     patch_url, json=[payload_item], headers=auth_header
                 )
@@ -181,14 +154,12 @@ def qualificado_kommo_provedor(
                     return {
                         "error": f"Falha ao mover lead existente: {resp_patch.text}"
                     }
-
             else:
                 # Contato existe, mas sem Lead -> CRIAR LEAD NOVO
                 logger.info(f"Contato {contact_id} sem leads. Criando novo Lead...")
                 create_url = f"{base_url}/api/v4/leads_complex"  # Usando complex para garantir link
                 # Ou usar POST /leads simples com _embedded contacts
                 create_url = f"{base_url}/api/v4/leads"
-
                 new_lead_payload = [
                     {
                         "name": f"Lead IA - {nome}",
@@ -197,26 +168,22 @@ def qualificado_kommo_provedor(
                         "_embedded": {"contacts": [{"id": int(contact_id)}]},
                     }
                 ]
-
                 resp_create = client.post(
                     create_url, json=new_lead_payload, headers=auth_header
                 )
                 if resp_create.status_code not in [200, 201, 202]:
                     logger.error(f"Erro ao criar Lead: {resp_create.text}")
                     return {"error": f"Falha ao criar novo lead: {resp_create.text}"}
-
                 # Tenta extrair ID do criado
                 try:
                     lead_id = resp_create.json()["_embedded"]["leads"][0]["id"]
                 except Exception:
                     lead_id = "recém-criado"
-
             logger.info(f"✅ Lead {lead_id} qualificado/criado com Status {status_id}")
             return {
                 "status": "success",
                 "message": f"Sucesso! Lead {lead_id} processado para etapa qualificada.",
             }
-
     except Exception as e:
         logger.error(f"Erro Tool Kommo: {e}")
         return {"error": str(e)}
@@ -238,51 +205,40 @@ def consultar_erp(nome_produto: str, betel_config: dict = None):
     """
     Consulta o ERP (Betel) para verificar preço e estoque de um produto.
     Use quando o cliente perguntar sobre "quanto custa", "tem tal peça", etc.
-
     Args:
         nome_produto (str): Nome do produto para busca (ex: "iphone 13 tela", "samsung a54 bateria").
     """
     if not betel_config:
         return {"error": "Configuração do ERP Betel não encontrada."}
-
     # Extrai configs
     loja_id = betel_config.get("loja_id")
     access_token = betel_config.get("access_token")
     secret_token = betel_config.get("secret_token")
     base_url = "https://api.beteltecnologia.com/produtos"
-
     if not all([loja_id, access_token, secret_token]):
         return {
             "error": "Credenciais Betel incompletas (loja_id, access_token, secret_token)."
         }
-
     headers = {
         "Content-Type": "application/json",
         "access-token": access_token,
         "secret-access-token": secret_token,
     }
-
     params = {"loja_id": loja_id, "nome": nome_produto}
-
     logger.info(f"🔎 Buscando produto Betel: {nome_produto} (Loja {loja_id})")
-
     try:
         with httpx.Client() as client:
             resp = client.get(base_url, params=params, headers=headers, timeout=15.0)
-
             if resp.status_code != 200:
                 logger.error(f"❌ Erro Betel API: {resp.status_code} - {resp.text}")
                 return {"error": f"Erro na API ERP: {resp.status_code}"}
-
             data = resp.json()
             # Ajuste conforme retorno real (assumindo lista direta ou chave 'data')
             # O print n8n sugere retorno direto de itens? Vamos assumir que sim ou verificar.
             # Se for muito grande, limitamos.
-
             # Formata para o LLM
             produtos_formatados = []
             lista_bluta = data if isinstance(data, list) else data.get("data", [])
-
             for p in lista_bluta[:10]:  # Top 10
                 produtos_formatados.append(
                     {
@@ -292,12 +248,9 @@ def consultar_erp(nome_produto: str, betel_config: dict = None):
                         "estoque": p.get("estoque_atual", "N/A"),
                     }
                 )
-
             if not produtos_formatados:
                 return "Nenhum produto encontrado com esse nome."
-
             return produtos_formatados
-
     except Exception as e:
         logger.error(f"Erro Tool Betel: {e}")
         return {"error": str(e)}
@@ -315,19 +268,32 @@ def enviar_relatorio(
     """
     Envia um relatório (ficha, reserva, pedido) para um grupo do WhatsApp.
     Use quando o cliente confirmar interesse, fechar pedido ou reservar produto.
-
     Args:
         tipo (str): Tipo do relatório ("ficha", "reserva", "pedido", etc.)
         dados (dict): Dados coletados (nome, telefone, produto, valor, etc.)
     """
+    import asyncio
+
     logger.info(f"📤 Enviando Relatório ({tipo}) para grupo {grupo_id}")
-
-    if not grupo_id or not uazapi_url or not uazapi_token:
-        logger.warning("⚠️ Configuração de grupo/Uazapi ausente. Relatório não enviado.")
-        return "Relatório registrado localmente (grupo não configurado)."
-
+    missing = []
+    if not grupo_id:
+        missing.append("grupo_id")
+    if not uazapi_url:
+        missing.append("uazapi_url")
+    if not uazapi_token:
+        missing.append("uazapi_token")
+    if missing:
+        logger.warning(
+            f"⚠️ Configuração incompleta: {', '.join(missing)}. Relatório não enviado."
+        )
+        return f"Erro: Configurações ausentes ({', '.join(missing)}). Verifique o cadastro."
     if not dados:
         dados = {}
+
+    # Valida se tem dados para preencher o template
+    if template and not dados:
+        logger.warning("⚠️ Template definido mas dados vazios! Não foi possível enviar.")
+        return "Erro: Você precisa coletar os dados do cliente antes de enviar o relatório. Pergunte: nome, CPF, RG, data de nascimento, nome da mãe, email, endereço, plano, cidade, dia de vencimento e se quer débito automático."
 
     # Monta mensagem
     if template:
@@ -341,14 +307,19 @@ def enviar_relatorio(
             linhas.append(f"• {key}: {val}")
         msg = "\n".join(linhas)
 
-    # Envia via Uazapi
+    # Envia via Uazapi (ASYNC - mesmo padrão do whatsapp_sender que funciona)
+    async def _send():
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{uazapi_url}/send/text",
+                json={"number": grupo_id, "text": msg},
+                headers={"token": uazapi_token},
+                timeout=30.0,
+            )
+            return resp
+
     try:
-        url = f"{uazapi_url}/message/sendText/{uazapi_token}"
-        payload = {
-            "number": grupo_id,
-            "textMessage": {"text": msg},
-        }
-        resp = httpx.post(url, json=payload, timeout=15.0)
+        resp = asyncio.run(_send())
         if resp.status_code in [200, 201]:
             logger.info(f"✅ Relatório enviado para grupo {grupo_id}")
             return "Relatório enviado com sucesso para o grupo."
@@ -371,23 +342,19 @@ def atendimento_humano(
     Transfere a conversa para um atendente humano.
     Use em casos de dúvidas complexas, negociações ou quando não encontrar a peça.
     A IA ficará pausada pelo tempo configurado (padrão: 60 min).
-
     Args:
         motivo (str): Motivo do transbordo (para log).
     """
     import redis
 
     logger.info(f"👤 Transbordo Humano: {motivo} | Chat: {chat_id}")
-
     if not chat_id:
         logger.warning(
             "⚠️ chat_id não fornecido para atendimento_humano. Pausa não ativada."
         )
         return "TRANSBORDO_HUMANO_ATIVADO (sem pausa - chat_id ausente)"
-
     if not redis_url:
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-
     try:
         r = redis.Redis.from_url(redis_url, decode_responses=True)
         pause_key = f"ai_paused:{chat_id}"
@@ -418,36 +385,29 @@ def get_enabled_tools(
     """
     Retorna a lista de funcoes Python para passar pro Gemini.
     Suporta configuração injetada (dict).
-
     Args:
         tools_config: Dicionário de configuração das tools.
         chat_id: ID do chat atual (para injetar em tools como atendimento_humano).
         client_config: Dict completo do cliente (para pegar api_url, token, etc).
-
     Ex: tools_config = {
         "consultar_cep": true,
         "qualificado_kommo_provedor": {"url": "...", "token": "...", "status_id": 123}
     }
     """
     tools = []
-
     if not tools_config:
         return []
-
     for tool_name, config_value in tools_config.items():
         if tool_name in AVAILABLE_TOOLS:
             tool_func = AVAILABLE_TOOLS[tool_name]
-
             # Se a config for um dicionário e estiver ativa
             # Ex: {"active": true, "url": "..."} ou apenas {"url": "..."} (implícito active)
-
             config_dict = config_value if isinstance(config_value, dict) else {}
             is_active = (
                 config_dict.get("active", True)
                 if isinstance(config_value, dict)
                 else bool(config_value)
             )
-
             if is_active:
                 if (
                     isinstance(config_value, dict)
@@ -455,23 +415,25 @@ def get_enabled_tools(
                 ):
                     # Injeta dependências (kommo_config)
                     kommo_cfg = {k: v for k, v in config_value.items() if k != "active"}
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
 
-                    # Recupera a função original (se estiver decorada com @tool)
-                    fn = tool_func.func if hasattr(tool_func, "func") else tool_func
+                    def create_kommo_wrapper(f, k_cfg):
+                        def wrapped_kommo(nome: str, telefone: str, plano: str):
+                            """Registra um lead qualificado movendo-o para a etapa correta no Kommo CRM."""
+                            return f(
+                                nome=nome,
+                                telefone=telefone,
+                                plano=plano,
+                                kommo_config=k_cfg,
+                            )
 
-                    # Wrapper com tipagem explícita para evitar erro do Pydantic/inspect
-                    def wrapped_kommo(nome: str, telefone: str, plano: str):
-                        """Registra um lead qualificado movendo-o para a etapa correta no Kommo CRM."""
-                        return fn(
-                            nome=nome,
-                            telefone=telefone,
-                            plano=plano,
-                            kommo_config=kommo_cfg,
-                        )
+                        return wrapped_kommo
 
                     tools.append(
                         StructuredTool.from_function(
-                            func=wrapped_kommo,
+                            func=create_kommo_wrapper(fn_captured, kommo_cfg),
                             name=tool_name,
                             description=tool_func.description,
                         )
@@ -481,15 +443,20 @@ def get_enabled_tools(
                 elif tool_name == "consultar_erp":
                     # Injeta dependencias (betel_config)
                     betel_cfg = {k: v for k, v in config_value.items() if k != "active"}
-                    fn = tool_func.func if hasattr(tool_func, "func") else tool_func
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
 
-                    def wrapped_betel(nome_produto: str):
-                        """Consulta o ERP (Betel) para verificar preço e estoque."""
-                        return fn(nome_produto=nome_produto, betel_config=betel_cfg)
+                    def create_betel_wrapper(f, b_cfg):
+                        def wrapped_betel(nome_produto: str):
+                            """Consulta o ERP (Betel) para verificar preço e estoque."""
+                            return f(nome_produto=nome_produto, betel_config=b_cfg)
+
+                        return wrapped_betel
 
                     tools.append(
                         StructuredTool.from_function(
-                            func=wrapped_betel,
+                            func=create_betel_wrapper(fn_captured, betel_cfg),
                             name=tool_name,
                             description=tool_func.description,
                         )
@@ -500,69 +467,143 @@ def get_enabled_tools(
                     grupo_cfg = config_dict.get("grupo_id", "")
                     template_cfg = config_dict.get("template", "")
 
+                    # Extrai placeholders do template para gerar description dinâmica
+                    import re
+
+                    placeholders = (
+                        re.findall(r"\{\{(\w+)\}\}", template_cfg)
+                        if template_cfg
+                        else []
+                    )
+                    placeholders_str = (
+                        ", ".join(placeholders)
+                        if placeholders
+                        else "nome, cpf, email, telefone, etc."
+                    )
+
                     # Uazapi vem da config global do cliente (DB) ou Env Var (Fallback)
                     uazapi_url_cfg = ""
                     uazapi_token_cfg = ""
-
                     if client_config:
-                        # Tenta pegar do banco (coluna api_url e token do cliente)
-                        uazapi_url_cfg = client_config.get("api_url")
-                        # O token do cliente no banco geralmente é o token Uazapi também, ou tem um campo específico?
-                        # No modelo atual, 'token' é o que identifica o cliente, mas 'api_url' é a Uazapi dele.
-                        # Vamos assumir que o 'token' do cliente serve para a Uazapi (se for Multi-Tenant Uazapi)
-                        # OU se precisamos de um token específico.
-                        # O usuario disse: "o que é usado no banco seria token que é o da uazapi né"
-                        uazapi_token_cfg = client_config.get("token")
+                        uazapi_config = client_config.get("tools_config", {}).get(
+                            "whatsapp", {}
+                        )
+                        uazapi_url_cfg = client_config.get(
+                            "api_url"
+                        ) or uazapi_config.get("url")
+                        uazapi_token_cfg = client_config.get(
+                            "token"
+                        ) or uazapi_config.get("key")
+                        logger.info(
+                            f"🔍 DEBUG UAZAPI CONFIG: Url={uazapi_url_cfg}, Token={uazapi_token_cfg}"
+                        )
 
-                    # Fallback para Env Vars
                     if not uazapi_url_cfg:
                         uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
                     if not uazapi_token_cfg:
                         uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
 
-                    fn = tool_func.func if hasattr(tool_func, "func") else tool_func
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
 
-                    def wrapped_relatorio(tipo: str = "ficha", dados: dict = None):
-                        """Envia um relatório (ficha, reserva, pedido) para um grupo do WhatsApp."""
-                        return fn(
-                            tipo=tipo,
-                            dados=dados or {},
-                            grupo_id=grupo_cfg,
-                            uazapi_url=uazapi_url_cfg,
-                            uazapi_token=uazapi_token_cfg,
-                            template=template_cfg,
+                    # Extrai telefone do chat_id (ex: 556199673672@s.whatsapp.net -> 556199673672)
+                    telefone_from_chat = ""
+                    if chat_id and "@" in str(chat_id):
+                        telefone_from_chat = str(chat_id).split("@")[0]
+                        logger.info(
+                            f"📱 Telefone extraído do chat_id: {telefone_from_chat}"
+                        )
+
+                    def create_relatorio_wrapper(f, grp, url, tkn, tpl, telefone_auto):
+                        def wrapped_relatorio(tipo: str = "ficha", dados: dict = None):
+                            """Envia um relatório para o grupo de vendas no WhatsApp."""
+                            # Auto-injeta telefone se não foi preenchido pela IA
+                            dados_final = dados or {}
+                            if telefone_auto and "telefone" not in dados_final:
+                                dados_final["telefone"] = telefone_auto
+                                logger.info(
+                                    f"📱 Telefone auto-injetado: {telefone_auto}"
+                                )
+
+                            logger.info(
+                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}, url={url}"
+                            )
+                            return f(
+                                tipo=tipo,
+                                dados=dados_final,
+                                grupo_id=grp,
+                                uazapi_url=url,
+                                uazapi_token=tkn,
+                                template=tpl,
+                            )
+
+                        return wrapped_relatorio
+
+                    # Schema Pydantic DINÂMICO baseado no template
+                    class EnviarRelatorioInput(BaseModel):
+                        tipo: str = Field(
+                            default="ficha",
+                            description="Tipo do relatório: ficha, reserva ou pedido",
+                        )
+                        dados: dict = Field(
+                            ...,
+                            description=f"""Dicionário OBRIGATÓRIO com os dados do cliente.
+Você DEVE preencher TODAS estas chaves extraindo os dados da conversa: {placeholders_str}
+Para cada chave, extraia o valor correspondente da conversa com o cliente.
+Se algum dado não foi coletado, pergunte ao cliente antes de chamar esta ferramenta.
+Exemplo: {{"nome": "João Silva", "cpf": "123.456.789-00", ...}}""",
                         )
 
                     tools.append(
                         StructuredTool.from_function(
-                            func=wrapped_relatorio,
+                            func=create_relatorio_wrapper(
+                                fn_captured,
+                                grupo_cfg,
+                                uazapi_url_cfg,
+                                uazapi_token_cfg,
+                                template_cfg,
+                                telefone_from_chat,
+                            ),
                             name=tool_name,
-                            description=tool_func.description,
+                            description=f"""Envia um relatório para o grupo de vendas no WhatsApp.
+QUANDO USAR: Após o cliente confirmar os dados coletados.
+CAMPOS NECESSÁRIOS: {placeholders_str}
+COMO CHAMAR: Passe o parâmetro "dados" com um dicionário contendo os campos acima.
+Extraia os valores da conversa com o cliente.""",
+                            args_schema=EnviarRelatorioInput,
                         )
                     )
                     logger.info(
-                        f"🔧 Tool Enviar Relatório Ativada: grupo={grupo_cfg[:20]}..."
+                        f"🔧 Tool Enviar Relatório Ativada: grupo={grupo_cfg[:20]}... | Campos: {placeholders_str}"
                     )
                 elif tool_name == "atendimento_humano":
                     # Injeta dependencias (chat_id, timeout, redis_url)
                     # chat_id será passado em runtime, timeout vem da config
                     timeout_cfg = config_dict.get("timeout_minutes", 60)
+                    timeout_cfg = config_dict.get("timeout_minutes", 60)
                     redis_cfg = os.getenv("REDIS_URL", "redis://localhost:6379")
-                    fn = tool_func.func if hasattr(tool_func, "func") else tool_func
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
 
-                    def wrapped_handoff(motivo: str = "Solicitação do cliente"):
-                        """Transfere a conversa para um atendente humano. A IA ficará pausada."""
-                        # chat_id é capturado do escopo de get_enabled_tools
-                        return fn(
-                            motivo=motivo,
-                            chat_id=chat_id,  # Injetado de get_enabled_tools
-                            timeout_minutes=timeout_cfg,
-                            redis_url=redis_cfg,
-                        )
+                    def create_handoff_wrapper(f, cid, tm, r_url):
+                        def wrapped_handoff(motivo: str = "Solicitação do cliente"):
+                            """Transfere a conversa para um atendente humano. A IA ficará pausada."""
+                            return f(
+                                motivo=motivo,
+                                chat_id=cid,
+                                timeout_minutes=tm,
+                                redis_url=r_url,
+                            )
+
+                        return wrapped_handoff
 
                     tools.append(
                         StructuredTool.from_function(
-                            func=wrapped_handoff,
+                            func=create_handoff_wrapper(
+                                fn_captured, chat_id, timeout_cfg, redis_cfg
+                            ),
                             name=tool_name,
                             description=tool_func.description,
                         )
@@ -573,5 +614,4 @@ def get_enabled_tools(
                 else:
                     tools.append(tool_func)
                     logger.info(f"🔧 Tool Ativada: {tool_name}")
-
     return tools or None

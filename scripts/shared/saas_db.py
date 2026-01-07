@@ -83,7 +83,7 @@ def get_client_config(token: str):
             with conn.cursor() as cur:
                 sql = """
                     SELECT id, name, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, token,
-                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active
+                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config
                     FROM clients 
                     WHERE token = %s
                 """

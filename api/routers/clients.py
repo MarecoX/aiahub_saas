@@ -15,6 +15,7 @@ from saas_db import (
 )
 from api.services.gemini_service import service as gemini_service
 
+
 router = APIRouter(
     tags=["Clients"],  # Standardized Tag
     dependencies=[Depends(verify_token)],
@@ -145,7 +146,20 @@ def update_client_tools(token: str, tools_update: ToolsConfigUpdate):
     if tools_update.lancepilot:
         current_tools["lancepilot"] = tools_update.lancepilot.model_dump()
 
-    # TODO: Outros tools
+    # Generic Tools
+    if tools_update.consultar_cep is not None:
+        current_tools["consultar_cep"] = tools_update.consultar_cep
+
+    if tools_update.atendimento_humano is not None:
+        current_tools["atendimento_humano"] = tools_update.atendimento_humano
+
+    # Follow-Up (Loop)
+    if tools_update.followup is not None:
+        current_tools["followup"] = tools_update.followup
+
+    # Custom Tools (Make-like)
+    if tools_update.custom_tools is not None:
+        current_tools["custom_tools"] = tools_update.custom_tools
 
     success = update_tools_config_db(client["id"], current_tools)
     if not success:

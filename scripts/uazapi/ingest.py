@@ -3,7 +3,7 @@ import os
 import asyncio
 import json
 import logging
-import datetime
+
 import redis.asyncio as redis
 from kestra import Kestra
 
@@ -141,6 +141,27 @@ async def run_ingest(webhook_data):
                     "chat_id": str(chat_id),
                     "client_token": token or "",
                     "status": "ai_reactivated",
+                }
+            )
+            return
+
+        if message_lower in ["#stop", "#pausa"]:
+            # Pausa IA (Modo Humano)
+            logger.info(f"🛑 Comando #stop detectado para {chat_id}")
+            try:
+                pause_key = f"ai_paused:{chat_id}"
+                redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+                # Pausa por 24h
+                await redis_client.set(pause_key, "true", ex=86400)
+                await redis_client.aclose()
+                logger.info(f"🛑 IA pausada manualmente para {chat_id}")
+            except Exception as e:
+                logger.error(f"Erro ao pausar IA: {e}")
+            Kestra.outputs(
+                {
+                    "chat_id": str(chat_id),
+                    "client_token": token or "",
+                    "status": "ai_paused_manual",
                 }
             )
             return

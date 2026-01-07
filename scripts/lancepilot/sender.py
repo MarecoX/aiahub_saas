@@ -12,8 +12,8 @@ sys.path.append(shared_dir)
 sys.path.append(os.path.dirname(current_dir))
 
 # Import Local
-from message_buffer import _split_natural_messages
-from lancepilot.client import LancePilotClient
+from message_buffer import _split_natural_messages  # noqa: E402
+from lancepilot.client import LancePilotClient  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("LancePilotSender")
