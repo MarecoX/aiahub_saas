@@ -40,19 +40,40 @@ if not OPENAI_API_KEY:
 DATABASE_URL = os.environ.get("DATABASE_CONNECTION_URI") or os.getenv("DATABASE_URL")
 
 # --- DATABASE / CHECKPOINTER SETUP ---
-try:
+# Conexão lazy para evitar conexões stale que o PostgreSQL fecha
+_checkpointer = None
+_conn = None
+
+
+def get_checkpointer():
+    """Retorna checkpointer, reconectando se necessário."""
+    global _checkpointer, _conn
+
     if not DATABASE_URL:
-        logger.warning("DATABASE_URL não encontrada. Checkpointer pode falhar.")
-        conn = None
-        checkpointer = None
-    else:
-        conn = psycopg.connect(DATABASE_URL, autocommit=True)
-        checkpointer = PostgresSaver(conn=conn)
-        checkpointer.setup()
-        logger.info("✅ PostgresSaver Checkpointer configurado com sucesso.")
-except Exception as e:
-    logger.error(f"❌ Falha ao configurar Checkpointer: {e}")
-    checkpointer = None
+        logger.warning("DATABASE_URL não encontrada. Checkpointer desabilitado.")
+        return None
+
+    try:
+        # Testa se a conexão ainda está viva
+        if _conn is not None:
+            try:
+                _conn.execute("SELECT 1")
+            except Exception:
+                logger.warning("⚠️ Conexão PostgreSQL stale detectada. Reconectando...")
+                _conn = None
+                _checkpointer = None
+
+        # Cria nova conexão se necessário
+        if _conn is None:
+            _conn = psycopg.connect(DATABASE_URL, autocommit=True)
+            _checkpointer = PostgresSaver(conn=_conn)
+            _checkpointer.setup()
+            logger.info("✅ PostgresSaver Checkpointer (re)conectado com sucesso.")
+
+        return _checkpointer
+    except Exception as e:
+        logger.error(f"❌ Falha ao configurar Checkpointer: {e}")
+        return None
 
 
 # --- TOOLS ---
@@ -156,7 +177,7 @@ def create_saas_agent(system_prompt: str, tools_list: list, store_id: str = None
         model=llm,
         tools=final_tools,
         system_prompt=system_prompt,
-        checkpointer=checkpointer,
+        checkpointer=get_checkpointer(),
         middleware=[trim_middleware],
     )
 
@@ -171,49 +192,63 @@ async def ask_saas(
     client_config: dict,
     tools_list: list = None,
 ):
-    try:
-        tools = tools_list or []
+    global _conn, _checkpointer  # Para poder resetar a conexão
 
-        # Extrai Store ID
-        store_id = client_config.get("gemini_store_id")
+    tools = tools_list or []
+    store_id = client_config.get("gemini_store_id")
 
-        # 1. Cria o Agente (Passando Store ID)
-        agent_runnable = create_saas_agent(system_prompt, tools, store_id=store_id)
-
-        # 2. Config de Execução
-        config = {"configurable": {"thread_id": chat_id}}
-
-        # 3. Executa com Proteção
+    # Retry loop para lidar com conexões stale
+    max_retries = 2
+    for attempt in range(max_retries):
         try:
-            result = await asyncio.to_thread(
-                agent_runnable.invoke, {"messages": [("user", query)]}, config=config
+            # 1. Cria o Agente (Passando Store ID)
+            agent_runnable = create_saas_agent(system_prompt, tools, store_id=store_id)
+
+            # 2. Config de Execução
+            config = {"configurable": {"thread_id": chat_id}}
+
+            # 3. Executa com Proteção
+            try:
+                result = await asyncio.to_thread(
+                    agent_runnable.invoke,
+                    {"messages": [("user", query)]},
+                    config=config,
+                )
+            except BadRequestError as e:
+                # AUTO-HEALING: Detecta erro de tool_calls pendentes e limpa
+                error_str = str(e)
+                if "tool_calls" in error_str or "400" in error_str:
+                    logger.warning(
+                        f"🚨 Histórico corrompido detectado para {chat_id}. Iniciando Auto-Limpeza..."
+                    )
+                    await asyncio.to_thread(clear_chat_history, chat_id)
+                    return "⚠️ [Auto-Correção] Detectei um erro na minha memória recente. Reiniciei nosso contexto. Por favor, faça sua pergunta novamente."
+                raise e
+
+            # 4. Processa Resposta
+            messages = result.get("messages", [])
+            if messages:
+                return messages[-1].content
+            else:
+                return "Erro: Nenhuma resposta gerada."
+
+        except psycopg.OperationalError as e:
+            # CONEXÃO STALE - Reconecta e tenta novamente
+            logger.warning(
+                f"⚠️ Conexão PostgreSQL perdida (tentativa {attempt + 1}/{max_retries}): {e}"
             )
-        # ... (restante do código igual)
-        except BadRequestError as e:
-            # AUTO-HEALING: Detecta erro de tool_calls pendentes e limpa
-            error_str = str(e)
-            if "tool_calls" in error_str or "400" in error_str:
-                logger.warning(
-                    f"🚨 Histórico corrompido detectado para {chat_id}. Iniciando Auto-Limpeza..."
+            _conn = None
+            _checkpointer = None
+
+            if attempt < max_retries - 1:
+                logger.info("🔄 Reconectando e tentando novamente...")
+                continue
+            else:
+                logger.error("❌ Falha após todas as tentativas de reconexão")
+                return (
+                    "Desculpe, tive um problema de conexão. Por favor, tente novamente."
                 )
 
-                # Executa limpeza (sync) em thread
-                await asyncio.to_thread(clear_chat_history, chat_id)
-
-                return "⚠️ [Auto-Correção] Detectei um erro na minha memória recente (ferramenta travada). Reiniciei nosso contexto para corrigir. Por favor, faça sua pergunta novamente."
-
-            # Se for outro BadRequest, relança
-            raise e
-
-        # 4. Processa Resposta
-        messages = result.get("messages", [])
-        if messages:
-            return messages[-1].content
-        else:
-            return "Erro: Nenhuma resposta gerada."
-
-    except Exception as e:
-        logger.error(f"Erro no Agent SaaS: {e}", exc_info=True)
-        return (
-            "Desculpe, tive um erro interno ao processar sua solicitação inteligente."
-        )
+        except Exception as e:
+            logger.error(f"Erro no Agent SaaS: {e}", exc_info=True)
+            return "Desculpe, tive um erro interno ao processar sua solicitação."

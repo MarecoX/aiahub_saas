@@ -289,12 +289,10 @@ def enviar_relatorio(
         return f"Erro: Configurações ausentes ({', '.join(missing)}). Verifique o cadastro."
     if not dados:
         dados = {}
-
     # Valida se tem dados para preencher o template
     if template and not dados:
         logger.warning("⚠️ Template definido mas dados vazios! Não foi possível enviar.")
         return "Erro: Você precisa coletar os dados do cliente antes de enviar o relatório. Pergunte: nome, CPF, RG, data de nascimento, nome da mãe, email, endereço, plano, cidade, dia de vencimento e se quer débito automático."
-
     # Monta mensagem
     if template:
         msg = template
@@ -466,7 +464,6 @@ def get_enabled_tools(
                     # Injeta dependencias (grupo_id, uazapi, template)
                     grupo_cfg = config_dict.get("grupo_id", "")
                     template_cfg = config_dict.get("template", "")
-
                     # Extrai placeholders do template para gerar description dinâmica
                     import re
 
@@ -480,7 +477,6 @@ def get_enabled_tools(
                         if placeholders
                         else "nome, cpf, email, telefone, etc."
                     )
-
                     # Uazapi vem da config global do cliente (DB) ou Env Var (Fallback)
                     uazapi_url_cfg = ""
                     uazapi_token_cfg = ""
@@ -497,16 +493,13 @@ def get_enabled_tools(
                         logger.info(
                             f"🔍 DEBUG UAZAPI CONFIG: Url={uazapi_url_cfg}, Token={uazapi_token_cfg}"
                         )
-
                     if not uazapi_url_cfg:
                         uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
                     if not uazapi_token_cfg:
                         uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
-
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
                     )
-
                     # Extrai telefone do chat_id (ex: 556199673672@s.whatsapp.net -> 556199673672)
                     telefone_from_chat = ""
                     if chat_id and "@" in str(chat_id):
@@ -525,7 +518,6 @@ def get_enabled_tools(
                                 logger.info(
                                     f"📱 Telefone auto-injetado: {telefone_auto}"
                                 )
-
                             logger.info(
                                 f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}, url={url}"
                             )

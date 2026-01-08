@@ -103,6 +103,11 @@ async def run_ingest(webhook_data):
         message_lower = text_content.strip().lower()
         token = webhook_data.get("token") or webhook_data.get("instanceId")
 
+        # DEBUG: Ver exatamente o que está chegando
+        logger.info(
+            f"🔍 DEBUG message_lower='{message_lower}' (len={len(message_lower)})"
+        )
+
         if message_lower == "#reset":
             # Limpa memória/histórico do chat
             logger.info(f"🔄 Comando #reset detectado para {chat_id}")
