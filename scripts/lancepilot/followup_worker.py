@@ -60,6 +60,7 @@ async def check_and_run_followups():
                     c.tools_config,
                     c.followup_config,
                     c.username,
+                    c.whatsapp_provider,
                     EXTRACT(EPOCH FROM (NOW() - ac.last_message_at)) / 60 as db_diff_minutes
                 FROM active_conversations ac
                 JOIN clients c ON ac.client_id = c.id
@@ -79,7 +80,13 @@ async def check_and_run_followups():
                 tools_config = row["tools_config"] or {}
                 last_context_txt = row.get("last_context") or ""
 
-                # 1. VERIFICAR SE É LANCEPILOT
+                # --- FILTRO POR PROVIDER (PRIMÁRIO) ---
+                provider = row.get("whatsapp_provider") or "none"
+                if provider != "lancepilot":
+                    continue  # Este worker só processa LancePilot
+                # ----------------------------------------
+
+                # 1. VERIFICAR CREDENCIAIS (LEGADO - Manter para pegar tokens)
                 lp_cfg = tools_config.get("lancepilot", {})
                 if not lp_cfg.get("active"):
                     # Não é cliente LancePilot, ignora (deixe pro worker Uazapi)
@@ -156,9 +163,34 @@ async def check_and_run_followups():
                     """
 
                     try:
-                        resp_ai = client_ai.models.generate_content(
+                        resp = client_ai.models.generate_content(
                             model="gemini-2.5-flash", contents=analysis_prompt
-                        ).text.strip()
+                        )
+                        resp_ai = resp.text.strip()
+
+                        # Salva usage para tracking
+                        try:
+                            from usage_tracker import save_usage
+
+                            gemini_usage = {}
+                            if hasattr(resp, "usage_metadata") and resp.usage_metadata:
+                                gemini_usage = {
+                                    "input_tokens": getattr(
+                                        resp.usage_metadata, "prompt_token_count", 0
+                                    ),
+                                    "output_tokens": getattr(
+                                        resp.usage_metadata, "candidates_token_count", 0
+                                    ),
+                                }
+                            save_usage(
+                                client_id=str(client_id),
+                                chat_id=chat_id,
+                                source="followup",
+                                provider="lancepilot",
+                                gemini_usage=gemini_usage,
+                            )
+                        except Exception:
+                            pass
 
                         if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
                             logger.info(f"🛑 Smart Termination for {chat_id}")

@@ -97,15 +97,27 @@ if GEMINI_KEY:
 
 # --- DYNAMIC TOOL FACTORY ---
 
+# Acumulador de uso do Gemini RAG (resetado a cada ask_saas)
+_gemini_usage_accumulator = {"input_tokens": 0, "output_tokens": 0}
+
 
 def create_knowledge_base_tool(store_id: str):
     """
     Cria uma ferramenta de busca dinâmica ligada a um Vector Store (Enterprise) específico.
     """
 
+    # Cache simples para evitar chamadas repetidas com mesma query
+    _rag_cache = {}
+
     def search_func(query: str):
         if not gemini_client:
             return "Erro: Client Gemini não configurado."
+
+        # Verifica cache (evita loop infinito)
+        cache_key = f"{store_id}:{query}"
+        if cache_key in _rag_cache:
+            logger.info(f"📚 RAG Cache Hit: {query[:50]}...")
+            return _rag_cache[cache_key]
 
         try:
             logger.info(f"📚 RAG Enterprise (v2-FIX): {store_id} | Query: {query}")
@@ -122,7 +134,21 @@ def create_knowledge_base_tool(store_id: str):
 
             # Retorna o texto gerado (que é a resposta baseada nos docs)
             if response.text:
-                return response.text
+                # Limita resposta a 2000 chars para evitar overflow no OpenAI
+                result = response.text[:2000]
+                _rag_cache[cache_key] = result
+
+                # Acumula usage do Gemini para tracking
+                global _gemini_usage_accumulator
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    _gemini_usage_accumulator["input_tokens"] += getattr(
+                        response.usage_metadata, "prompt_token_count", 0
+                    )
+                    _gemini_usage_accumulator["output_tokens"] += getattr(
+                        response.usage_metadata, "candidates_token_count", 0
+                    )
+
+                return result
             return "Sem informações relevantes encontradas nos documentos."
 
         except Exception as e:
@@ -197,6 +223,10 @@ async def ask_saas(
     tools = tools_list or []
     store_id = client_config.get("gemini_store_id")
 
+    # Reseta acumulador de Gemini usage
+    global _gemini_usage_accumulator
+    _gemini_usage_accumulator = {"input_tokens": 0, "output_tokens": 0}
+
     # Retry loop para lidar com conexões stale
     max_retries = 2
     for attempt in range(max_retries):
@@ -227,10 +257,22 @@ async def ask_saas(
 
             # 4. Processa Resposta
             messages = result.get("messages", [])
+
+            # Captura usage para tracking
+            usage_data = {"openai": None, "gemini": _gemini_usage_accumulator.copy()}
+            # Tenta extrair usage do OpenAI (via response_metadata)
+            if messages and hasattr(messages[-1], "response_metadata"):
+                token_usage = messages[-1].response_metadata.get("token_usage", {})
+                if token_usage:
+                    usage_data["openai"] = {
+                        "input_tokens": token_usage.get("prompt_tokens", 0),
+                        "output_tokens": token_usage.get("completion_tokens", 0),
+                    }
+
             if messages:
-                return messages[-1].content
+                return messages[-1].content, usage_data
             else:
-                return "Erro: Nenhuma resposta gerada."
+                return "Erro: Nenhuma resposta gerada.", usage_data
 
         except psycopg.OperationalError as e:
             # CONEXÃO STALE - Reconecta e tenta novamente

@@ -112,7 +112,7 @@ async def run_rag():
         )
 
         # Chama o Cérebro (OpenAI) passando as Tools (Gemini/Maps)
-        response_text = await ask_saas(
+        response_text, usage_data = await ask_saas(
             query=full_query,
             chat_id=chat_id,
             system_prompt=system_prompt,
@@ -121,6 +121,21 @@ async def run_rag():
         )
 
         logger.info(f"🤖 Resposta Agente SaaS: {response_text[:50]}...")
+
+        # Salva usage para tracking de custos
+        try:
+            from usage_tracker import save_usage
+
+            save_usage(
+                client_id=str(client_config["id"]),
+                chat_id=chat_id,
+                source="rag_worker",
+                provider="uazapi",
+                openai_usage=usage_data.get("openai"),
+                gemini_usage=usage_data.get("gemini"),
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao salvar usage: {e}")
 
         # --- TRACKING UPDATE (Follow-up System) ---
         try:

@@ -83,7 +83,7 @@ def get_client_config(token: str):
             with conn.cursor() as cur:
                 sql = """
                     SELECT id, name, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, token,
-                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config
+                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config, whatsapp_provider
                     FROM clients 
                     WHERE token = %s
                 """
@@ -215,6 +215,7 @@ def create_client_db(
     api_url=None,
     timeout=3600,
     store_id=None,
+    whatsapp_provider="none",
 ):
     """
     Cria um novo cliente no banco de dados.
@@ -227,8 +228,8 @@ def create_client_db(
         with get_connection() as conn:
             with conn.cursor() as cur:
                 sql = """
-                    INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash, whatsapp_provider)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
                 cur.execute(
@@ -243,6 +244,7 @@ def create_client_db(
                         api_url,
                         username,
                         password_hash,
+                        whatsapp_provider,
                     ),
                 )
                 new_id = cur.fetchone()["id"]
@@ -342,7 +344,7 @@ def get_all_clients_db():
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, token, username, api_url, human_attendant_timeout, tools_config FROM clients ORDER BY created_at DESC"
+                    "SELECT id, name, token, username, api_url, human_attendant_timeout, tools_config, whatsapp_provider FROM clients ORDER BY created_at DESC"
                 )
                 return cur.fetchall()
     except Exception as e:

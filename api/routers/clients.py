@@ -68,6 +68,7 @@ def create_client(client: ClientCreate, x_admin_user: str = Header("admin")):
         api_url=client.api_url,
         timeout=client.human_attendant_timeout,
         store_id=store_id,
+        whatsapp_provider=client.whatsapp_provider or "none",
     )
 
     if not new_id:

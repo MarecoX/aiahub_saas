@@ -181,6 +181,18 @@ async def meta_oauth_exchange(payload: OAuthCode):
     if success:
         logger.info(f"💾 Credenciais Meta salvas para cliente {client_config['id']}")
 
+        # 3.5 Atualiza campo whatsapp_provider para 'meta'
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE clients SET whatsapp_provider = 'meta' WHERE id = %s",
+                        (client_config["id"],),
+                    )
+            logger.info(f"✅ whatsapp_provider atualizado para 'meta'")
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao atualizar whatsapp_provider: {e}")
+
         # 4. Auto-Subscribe App to WABA (Webhooks)
         try:
             meta_client = MetaClient(long_lived_token, phone_id)

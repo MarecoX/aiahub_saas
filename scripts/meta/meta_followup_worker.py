@@ -57,7 +57,8 @@ async def check_and_run_followups():
                     ac.last_context,
                     c.followup_config,
                     c.tools_config,
-                    c.username
+                    c.username,
+                    c.whatsapp_provider
                 FROM active_conversations ac
                 JOIN clients c ON ac.client_id = c.id
                 WHERE ac.last_role = 'assistant'
@@ -76,10 +77,13 @@ async def check_and_run_followups():
                 last_context_txt = row.get("last_context") or ""
                 tools_config_json = row.get("tools_config") or {}
 
-                # ----------------------------------------------------
-                # SEPARATION OF CONCERNS (META WORKER):
-                # Filtra APENAS clientes com config Meta Ativa
-                # ----------------------------------------------------
+                # --- FILTRO POR PROVIDER (PRIMÁRIO) ---
+                provider = row.get("whatsapp_provider") or "none"
+                if provider != "meta":
+                    continue  # Este worker só processa Meta
+                # ----------------------------------------
+
+                # --- CONFIG META (LEGADO - Manter para pegar tokens) ---
                 meta_cfg = tools_config_json.get("whatsapp", {})
                 meta_legacy = tools_config_json.get("whatsapp_official", {})
 
@@ -137,9 +141,39 @@ async def check_and_run_followups():
                         """
 
                         if client:
-                            resp_ai = client.models.generate_content(
+                            resp = client.models.generate_content(
                                 model="gemini-1.5-flash", contents=analysis_prompt
-                            ).text.strip()
+                            )
+                            resp_ai = resp.text.strip()
+
+                            # Salva usage para tracking
+                            try:
+                                from usage_tracker import save_usage
+
+                                gemini_usage = {}
+                                if (
+                                    hasattr(resp, "usage_metadata")
+                                    and resp.usage_metadata
+                                ):
+                                    gemini_usage = {
+                                        "input_tokens": getattr(
+                                            resp.usage_metadata, "prompt_token_count", 0
+                                        ),
+                                        "output_tokens": getattr(
+                                            resp.usage_metadata,
+                                            "candidates_token_count",
+                                            0,
+                                        ),
+                                    }
+                                save_usage(
+                                    client_id=str(client_id),
+                                    chat_id=chat_id,
+                                    source="followup",
+                                    provider="meta",
+                                    gemini_usage=gemini_usage,
+                                )
+                            except Exception:
+                                pass
 
                             # META OFFICIAL SPECIFIC SEND
                             meta_client_instance = MetaClient(token, phone_id)

@@ -102,6 +102,7 @@ async def check_and_run_followups():
                     c.username,
                     c.api_url,
                     c.token as client_token,
+                    c.whatsapp_provider,
                     EXTRACT(EPOCH FROM (NOW() - ac.last_message_at)) / 60 as db_diff_minutes
                 FROM active_conversations ac
                 JOIN clients c ON ac.client_id = c.id
@@ -121,7 +122,13 @@ async def check_and_run_followups():
                 last_context_txt = row.get("last_context") or ""
                 tools_config_json = row.get("tools_config") or {}
 
-                # --- SAFETY CHECKS (Separation of Concerns) ---
+                # --- FILTRO POR PROVIDER (PRIMÁRIO) ---
+                provider = row.get("whatsapp_provider") or "none"
+                if provider not in [None, "", "none", "uazapi"]:
+                    continue  # Este worker só processa Uazapi
+                # ----------------------------------------
+
+                # --- SAFETY CHECKS (LEGADO - Manter para compatibilidade) ---
                 meta_cfg = tools_config_json.get("whatsapp", {})
                 meta_legacy = tools_config_json.get("whatsapp_official", {})
                 lp_cfg = tools_config_json.get("lancepilot", {})
@@ -194,9 +201,34 @@ async def check_and_run_followups():
                             logger.error("Gemini Client Unreachable for Analysis")
                             continue
 
-                        resp_ai = client.models.generate_content(
+                        resp = client.models.generate_content(
                             model="gemini-2.5-flash", contents=analysis_prompt
-                        ).text.strip()
+                        )
+                        resp_ai = resp.text.strip()
+
+                        # Salva usage para tracking
+                        try:
+                            from usage_tracker import save_usage
+
+                            gemini_usage = {}
+                            if hasattr(resp, "usage_metadata") and resp.usage_metadata:
+                                gemini_usage = {
+                                    "input_tokens": getattr(
+                                        resp.usage_metadata, "prompt_token_count", 0
+                                    ),
+                                    "output_tokens": getattr(
+                                        resp.usage_metadata, "candidates_token_count", 0
+                                    ),
+                                }
+                            save_usage(
+                                client_id=str(client_id),
+                                chat_id=chat_id,
+                                source="followup",
+                                provider="uazapi",
+                                gemini_usage=gemini_usage,
+                            )
+                        except Exception as usage_err:
+                            logger.debug(f"Usage tracking: {usage_err}")
 
                         if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
                             # Smart Termination

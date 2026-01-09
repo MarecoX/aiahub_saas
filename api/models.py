@@ -17,6 +17,9 @@ class ClientBase(BaseModel):
     human_attendant_timeout: Optional[int] = Field(
         3600, description="Tempo de silêncio (segundos) após intervenção humana"
     )
+    whatsapp_provider: Optional[str] = Field(
+        "none", description="Provider WhatsApp: none, uazapi, meta, lancepilot"
+    )
 
 
 class ClientCreate(ClientBase):

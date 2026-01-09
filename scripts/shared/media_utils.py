@@ -55,6 +55,23 @@ def transcribe_audio_bytes(audio_bytes: bytes, filename: str = "audio.ogg") -> s
 
         text = transcript.text
         logger.info(f"✅ Transcrição: {text[:50]}...")
+
+        # Salva usage para tracking (estima segundos pelo tamanho do áudio)
+        # Aproximação: 16kB/s para OGG Opus
+        try:
+            from usage_tracker import save_usage
+
+            estimated_seconds = len(audio_bytes) / 16000
+            save_usage(
+                client_id="unknown",  # Será passado pelo caller quando disponível
+                chat_id="unknown",
+                source="media",
+                provider="uazapi",
+                whisper_seconds=int(estimated_seconds),
+            )
+        except Exception:
+            pass
+
         return text
 
     except Exception as e:
@@ -85,6 +102,32 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str = "image/jpeg") -> st
 
         text = response.text.strip()
         logger.info(f"✅ Visão: {text[:50]}...")
+
+        # Salva usage para tracking
+        try:
+            from usage_tracker import save_usage
+
+            gemini_usage = {}
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                gemini_usage = {
+                    "input_tokens": getattr(
+                        response.usage_metadata, "prompt_token_count", 0
+                    ),
+                    "output_tokens": getattr(
+                        response.usage_metadata, "candidates_token_count", 0
+                    ),
+                }
+            save_usage(
+                client_id="unknown",
+                chat_id="unknown",
+                source="media",
+                provider="uazapi",
+                gemini_usage=gemini_usage,
+                images_count=1,
+            )
+        except Exception:
+            pass
+
         return text
 
     except Exception as e:

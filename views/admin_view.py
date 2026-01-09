@@ -33,7 +33,7 @@ def render_admin_view():
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT id, name, token, username, is_admin, gemini_store_id, tools_config, human_attendant_timeout, api_url, created_at FROM clients ORDER BY created_at DESC"
+                        "SELECT id, name, token, username, is_admin, gemini_store_id, tools_config, human_attendant_timeout, api_url, created_at, whatsapp_provider FROM clients ORDER BY created_at DESC"
                     )
                     rows = cur.fetchall()
                     if rows:
@@ -57,8 +57,8 @@ def render_admin_view():
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     sql = """
-                        INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash, whatsapp_provider)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """
                     tools_config = '{"consultar_cep": true}'
                     data_url = api_url if api_url and api_url.strip() else None
@@ -74,6 +74,7 @@ def render_admin_view():
                             data_url,
                             username,
                             pwd_hash,
+                            "none",  # whatsapp_provider default
                         ),
                     )
             st.success(f"✅ Cliente '{name}' criado (User: {username})!")
