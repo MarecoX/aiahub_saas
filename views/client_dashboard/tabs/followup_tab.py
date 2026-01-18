@@ -21,15 +21,22 @@ def render_followup_tab(user_data):
     if not f_config:
         f_config = {}
 
-    state_key = f"followup_stages_{user_data['id']}"
-    if state_key not in st.session_state:
+    # Keys de Sessão
+    stages_key = f"followup_stages_{user_data['id']}"
+    active_key = f"active_{user_data['id']}"
+
+    # Inicialização Robusta (Separada)
+    if stages_key not in st.session_state:
         import copy
 
-        st.session_state[state_key] = copy.deepcopy(f_config.get("stages", []))
-        st.session_state[f"active_{user_data['id']}"] = f_config.get("active", False)
+        st.session_state[stages_key] = copy.deepcopy(f_config.get("stages", []))
 
-    active = st.toggle("Ativar Follow-up Automático", key=f"active_{user_data['id']}")
-    current_stages = st.session_state[state_key]
+    if active_key not in st.session_state:
+        st.session_state[active_key] = f_config.get("active", False)
+
+    # Widgets
+    active = st.toggle("Ativar Follow-up Automático", key=active_key)
+    current_stages = st.session_state[stages_key]
 
     st.subheader(f"Etapas de Retomada ({len(current_stages)})")
 
@@ -53,18 +60,21 @@ def render_followup_tab(user_data):
 
     if indices_to_remove:
         for index in sorted(indices_to_remove, reverse=True):
-            del st.session_state[state_key][index]
+            del st.session_state[stages_key][index]
         st.rerun()
 
     if st.button("➕ Adicionar Nova Etapa"):
-        st.session_state[state_key].append(
-            {"delay_minutes": 60, "prompt": "Olá, ainda está por aqui?"}
+        st.session_state[stages_key].append(
+            {
+                "delay_minutes": 60,
+                "prompt": "Pergunte educadamente se ficou alguma dúvida pendente.",
+            }
         )
         st.rerun()
 
     st.divider()
     if st.button("💾 Salvar Configuração de Follow-up", type="primary"):
-        final_config = {"active": active, "stages": st.session_state[state_key]}
+        final_config = {"active": active, "stages": st.session_state[stages_key]}
         try:
             import json
 
@@ -76,6 +86,6 @@ def render_followup_tab(user_data):
                     )
             user_data["followup_config"] = final_config
             st.success("✅ Configuração salva com sucesso!")
-            st.balloons()
+            st.rerun()
         except Exception as e:
             st.error(f"Erro ao salvar: {e}")

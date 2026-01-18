@@ -2,6 +2,11 @@ id: lancepilot_followup
 namespace: company.team
 description: "Worker Agendado (Cron) para processar Follow-ups do LancePilot (SaaS)."
 
+# Concurrency para evitar overlap de execuções
+concurrency:
+  limit: 1
+  behavior: CANCEL  # Se já está rodando, cancela nova execução
+
 triggers:
   - id: schedule
     type: io.kestra.plugin.core.trigger.Schedule

@@ -1,12 +1,9 @@
 import os
 import sys
 import logging
-import json
 import asyncio
-import datetime
 import redis.asyncio as redis
 from google import genai
-from psycopg.rows import dict_row
 
 # Add path to import local modules (shared directory)
 sys.path.append(
@@ -116,7 +113,6 @@ async def check_and_run_followups():
             for row in rows:
                 chat_id = row["chat_id"]
                 client_id = row["client_id"]
-                last_msg_at = row["last_message_at"]
                 current_stage_idx = row["followup_stage"] or 0
                 config = row["followup_config"] or {}
                 last_context_txt = row.get("last_context") or ""
@@ -147,9 +143,23 @@ async def check_and_run_followups():
                     continue
                 # -------------------
 
-                # Check Active Flag via Python
+                # === EARLY EXIT: Config vazia ou None ===
+                if not config:
+                    logger.debug(f"⏭️ SKIP [{chat_id}]: followup_config is empty/None")
+                    continue
+
+                # === DEBUG LOGGING (CRÍTICO) ===
+                logger.info(f"🔍 DEBUG [{chat_id}] followup_config raw: {config}")
+
+                # Check Active Flag via Python - MAIS ROBUSTO
                 is_active = config.get("active")
-                if str(is_active).lower() != "true":
+
+                # Trata vários formatos: True, "true", "True", 1, "1"
+                active_values = [True, "true", "True", "1", 1]
+                if is_active not in active_values:
+                    logger.info(
+                        f"⏭️ SKIP [{chat_id}]: Follow-up DESATIVADO (active={is_active})"
+                    )
                     continue
 
                 # Check 1: Human Intervention (Redis)
@@ -161,6 +171,9 @@ async def check_and_run_followups():
 
                 stages = config.get("stages", [])
                 if not stages or current_stage_idx >= len(stages):
+                    logger.info(
+                        f"⏭️ SKIP [{chat_id}]: No stages configured (stages={len(stages)}, current={current_stage_idx})"
+                    )
                     continue
 
                 stage_cfg = stages[current_stage_idx]
@@ -191,9 +204,10 @@ async def check_and_run_followups():
 
                     Instrução de Retomada: "{prompt_behavior}"
 
-                    DECISÃO:
-                    1. Se o cliente já encerrou, agradeceu, ou disse que não quer mais nada -> Responda APENAS: "FINISHED"
-                    2. Se o contexto pede retomada -> Responda com a mensagem de texto para enviar ao cliente.
+                    DECISÃO CRÍTICA:
+                    1. Se o cliente JÁ encerrou, agradeceu, disse que vai aguardar, ou disse que não quer mais nada -> Responda APENAS: "FINISHED"
+                    2. Se o cliente explicitamente pediu para parar ou demonstrou irritação -> Responda APENAS: "FINISHED"
+                    3. Se o contexto pede retomada -> Responda com a mensagem de texto para enviar ao cliente.
                     """
 
                     try:

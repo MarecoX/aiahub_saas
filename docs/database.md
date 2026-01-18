@@ -91,14 +91,44 @@ Todo o acesso é centralizado no módulo `scripts/shared/saas_db.py`.
 ### Connection Pooling
 Não abrimos uma conexão por requisição (isso mataria o banco). Usamos `psycopg_pool`.
 *   O Pool mantém conexões vivas e as reusa.
-*   `max_size=20`: Permite até 20 threads simultâneas de banco.
+*   **`max_size`**: Configurável via variável de ambiente `DB_POOL_MAX_SIZE` (default: 5).
+*   **`timeout`**: 30 segundos para evitar travamentos.
+
+### Configuração via Ambiente
+```bash
+# No .env ou docker-compose
+DB_POOL_MAX_SIZE=10  # Aumenta para 10 conexões por container
+```
+
+### PostgreSQL `max_connections`
+Para escalar, aumente `max_connections` no PostgreSQL:
+```yaml
+# docker-compose.yaml
+services:
+  postgres:
+    command: postgres -c max_connections=500 -c shared_buffers=512MB
+```
 
 ### Padrão Singleton
 O pool é inicializado apenas uma vez por processo Python.
 ```python
 # saas_db.py
-_pool = ConnectionPool(...)
+_pool = ConnectionPool(
+    conninfo=DB_URL,
+    min_size=1,
+    max_size=DB_POOL_MAX_SIZE,  # Configurável via env
+    timeout=30.0,
+)
 
 def get_connection():
     return _pool.connection()  # Empresta uma conexão
 ```
+
+### Controle de Concorrência (Kestra)
+Para evitar esgotar conexões, os flows usam `concurrency`:
+```yaml
+concurrency:
+  limit: 10      # Máximo 10 execuções simultâneas
+  behavior: QUEUE  # Extras entram em fila
+```
+

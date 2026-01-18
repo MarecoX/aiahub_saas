@@ -2,6 +2,11 @@ id: uazapi_pure_native2
 namespace: company.team
 description: Fluxo Puro NATIVO Kestra (Otimizado com Imagem Custom).
 
+# ⚡ CONTROLE DE CONCORRÊNCIA - Evita esgotar conexões do PostgreSQL
+concurrency:
+  limit: 10  # Máximo de 10 execuções simultâneas (ajuste conforme necessário)
+  behavior: QUEUE  # Webhooks extras vão para fila ao invés de serem rejeitados
+
 inputs:
   - id: message
     type: JSON

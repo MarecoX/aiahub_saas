@@ -2,12 +2,19 @@ id: saas_followup_cron
 namespace: company.team
 description: "Roda a cada 5min para verificar e enviar Follow-ups de WhatsApp (SaaS)"
 
+# ⚠️ Para desativar COMPLETAMENTE este flow, comente o trigger ou delete o flow do Kestra UI
+
+# Concurrency para evitar overlap de execuções
+concurrency:
+  limit: 1
+  behavior: CANCEL  # Se já está rodando, cancela nova execução
+
 tasks:
   - id: run_followup_worker
     type: io.kestra.plugin.scripts.python.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: NEVER
+      pullPolicy: ALWAYS  # ⚠️ CRÍTICO: Garante que usa código atualizado!
     containerImage: marsllator/my-kestra-worker:latest
     
     namespaceFiles:
@@ -29,3 +36,4 @@ triggers:
   - id: schedule
     type: io.kestra.plugin.core.trigger.Schedule
     cron: "*/5 * * * *"
+

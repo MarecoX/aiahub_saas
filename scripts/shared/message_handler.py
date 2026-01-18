@@ -8,6 +8,8 @@ from google import genai
 from google.genai import types
 
 
+from usage_tracker import save_usage  # ← Import tracking
+
 logger = logging.getLogger(__name__)
 
 # Configuração
@@ -17,6 +19,11 @@ UAZAPI_URL = os.getenv("UAZAPI_URL")
 UAZAPI_KEY = os.getenv("UAZAPI_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# --- VERSION TRACKING ---
+VERSION = "1.2.0 (Usage Tracking Patch - 2026-01-10)"
+logger.info(f"✅ MessageHandler Loaded. Version: {VERSION}")
+# ------------------------
 
 
 class MessageInfo(NamedTuple):
@@ -29,7 +36,13 @@ class MessageInfo(NamedTuple):
 
 
 async def download_and_process_media(
-    message_id: str, media_type: str, message_data: dict
+    message_id: str,
+    media_type: str,
+    message_data: dict,
+    api_url: str = None,
+    api_key: str = None,
+    client_id: str = None,  # ← Parametro tracking
+    chat_id: str = None,    # ← Parametro tracking
 ) -> tuple[str, str | None]:
     """
     Baixa e processa mídia usando UAZAPI com transcrição automática.
@@ -38,6 +51,10 @@ async def download_and_process_media(
         message_id: ID da mensagem
         media_type: Tipo (audio, image, video, document)
         message_data: Dados da mensagem (para quoted media)
+        api_url: URL da API Uazapi (opcional, usa env var se não passado)
+        api_key: Token da API Uazapi (opcional, usa env var se não passado)
+        client_id: ID do cliente para tracking (opcional)
+        chat_id: ID do chat para tracking (opcional)
 
     Returns:
         (texto_extraído, caminho_arquivo)
@@ -60,13 +77,27 @@ async def download_and_process_media(
         if message_data.get("quoted"):
             payload["download_quoted"] = True
 
+        # Usa credenciais passadas ou fallback para env vars
+        target_url = api_url or UAZAPI_URL
+        target_key = api_key or UAZAPI_KEY
+
+        if not target_url or not target_key:
+            logger.error(
+                f"❌ UAZAPI_URL ou UAZAPI_KEY não configurado! URL={target_url}, KEY={'***' if target_key else None}"
+            )
+            return (
+                f"[Mídia {media_type} não processada: configuração de API ausente]",
+                None,
+            )
+
         logger.info(f"Baixando {media_type} ({message_id})...")
+        logger.debug(f"Usando URL: {target_url}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{UAZAPI_URL}/message/download",
+                f"{target_url}/message/download",
                 json=payload,
-                headers={"token": f"{UAZAPI_KEY}"},
+                headers={"token": f"{target_key}"},
             )
             response.raise_for_status()
             data = response.json()
@@ -75,6 +106,29 @@ async def download_and_process_media(
         if media_type == "audio" and data.get("transcription"):
             text = data["transcription"].strip()
             logger.info(f"✅ Áudio transcrito: {text[:60]}...")
+            
+            # --- TRACKING: Contabiliza Whisper ---
+            if client_id and chat_id:
+                try:
+                    # Tenta extrair duração (Uazapi/WPP Connect structure vary)
+                    # message_data -> content -> audioMessage -> seconds
+                    duration = 0
+                    content = message_data.get("content", {})
+                    if isinstance(content, dict):
+                        audio_info = content.get("audioMessage", {})
+                        duration = audio_info.get("seconds", 10) # default estimative 10s if not found
+                    
+                    save_usage(
+                        client_id=client_id,
+                        chat_id=chat_id,
+                        source="media_handler",
+                        provider="uazapi",
+                        whisper_seconds=int(duration) or 10
+                    )
+                except Exception as e:
+                    logger.error(f"⚠️ Falha no tracking de áudio: {e}")
+            # -------------------------------------
+
             return f"[ÁUDIO DO USUÁRIO]: {text}", None  # Adiciona contexto explícito
 
         # Para imagem/documento, salva base64 e analisa
@@ -233,12 +287,22 @@ def _should_process_message(msg_type: str) -> bool:
     return msg_type in processable
 
 
-async def handle_message(message_data: dict) -> MessageInfo:
+async def handle_message(
+    message_data: dict, 
+    api_url: str = None, 
+    api_key: str = None,
+    client_id: str = None, # ← NOVO
+    chat_id: str = None    # ← NOVO
+) -> MessageInfo:
     """
     Processa uma mensagem e retorna informações estruturadas.
 
     Args:
         message_data: Dicionário com dados da mensagem do webhook
+        api_url: URL da API Uazapi (opcional, para download de mídia)
+        api_key: Token da API Uazapi (opcional, para download de mídia)
+        client_id: ID do cliente para tracking (opcional)
+        chat_id: ID do chat para tracking (opcional)
 
     Returns:
         MessageInfo com texto, tipo, caminho da mídia e se deve processar
@@ -247,6 +311,8 @@ async def handle_message(message_data: dict) -> MessageInfo:
         content = message_data.get("content")
         msg_type = message_data.get("messageType", "unknown")
         message_id = message_data.get("id", "")
+        # Usa o chat_id passado ou tenta extrair (fallback)
+        final_chat_id = chat_id or message_data.get("chatid") or message_data.get("remoteJid")
 
         # Extrai texto inicial
         text, detected_type = _extract_text_from_content(content, msg_type)
@@ -284,9 +350,15 @@ async def handle_message(message_data: dict) -> MessageInfo:
         # Processa mídia
         media_path = None
         if category in ["image", "audio", "video", "document"]:
-            # ← NOVO: Chamada unificada
+            # ← NOVO: Chamada unificada com CREDENCIAIS + TRACKING
             extracted_text, media_path = await download_and_process_media(
-                message_id, category, message_data
+                message_id, 
+                category, 
+                message_data, 
+                api_url=api_url, 
+                api_key=api_key,
+                client_id=client_id,
+                chat_id=final_chat_id
             )
 
             if extracted_text:

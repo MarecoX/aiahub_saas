@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime, timedelta
 import json
 import uuid
 import os
@@ -129,12 +130,13 @@ def render_admin_view():
             return False
 
     # --- UI ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         [
             "➕ Criar Cliente",
             "📋 Lista Geral",
             "🔐 Acessos",
             "⚙️ Config Avançada",
+            "📊 Consumo",
             "🛠️ Debug",
         ]
     )
@@ -212,10 +214,91 @@ def render_admin_view():
             )
             url_val = st.text_input("URL Override", value=row.get("api_url") or "")
 
+            # --- System Prompt Edit ---
+            sys_prompt = st.text_area(
+                "System Prompt", value=row.get("system_prompt") or "", height=200
+            )
+
             if st.button("Salvar Config"):
-                update_config(row["id"], cfg_txt, to_val, url_val)
+                # Update Configs + Prompt
+                try:
+                    with get_connection() as conn:
+                        with conn.cursor() as cur:
+                            # Update Tools/Timeout/URL
+                            cur.execute(
+                                "UPDATE clients SET tools_config = %s, human_attendant_timeout = %s, api_url = %s, system_prompt = %s WHERE id = %s",
+                                (
+                                    cfg_txt,
+                                    to_val,
+                                    url_val if url_val else None,
+                                    sys_prompt,
+                                    row["id"],
+                                ),
+                            )
+                    st.success("✅ Configurações e Prompt salvos!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
     with tab5:
+        st.header("📊 Consumo de IA por Cliente")
+        st.caption("Monitoramento de custos de OpenAI, Gemini e Whisper")
+
+        # Filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("De", value=datetime.now() - timedelta(days=30))
+        with col2:
+            end_date = st.date_input("Até", value=datetime.now())
+
+        # Query agregada
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT 
+                            c.name as cliente,
+                            u.provider,
+                            COUNT(DISTINCT u.chat_id) as atendimentos,
+                            SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
+                            SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
+                            SUM(u.whisper_seconds) as segundos_audio,
+                            SUM(u.images_count) as imagens,
+                            ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
+                            ROUND(SUM(u.cost_usd * 6)::numeric, 2) as custo_brl
+                        FROM usage_tracking u
+                        JOIN clients c ON u.client_id = c.id
+                        WHERE u.created_at BETWEEN %s AND %s
+                        GROUP BY c.name, u.provider
+                        ORDER BY custo_usd DESC
+                    """,
+                        (start_date, end_date),
+                    )
+                    rows = cur.fetchall()
+                    if rows:
+                        df_usage = pd.DataFrame(rows)
+                        st.dataframe(df_usage, use_container_width=True)
+
+                        # Totais
+                        total_usd = df_usage["custo_usd"].sum()
+                        total_brl = df_usage["custo_brl"].sum()
+                        st.metric(
+                            "💰 Custo Total",
+                            f"R$ {total_brl:.2f}",
+                            f"USD {total_usd:.4f}",
+                        )
+
+                        # Gráfico
+                        if len(df_usage) > 1:
+                            st.bar_chart(df_usage.set_index("cliente")["custo_brl"])
+                    else:
+                        st.info("💭 Nenhum dado de consumo encontrado no período.")
+        except Exception as e:
+            st.warning(f"⚠️ Tabela usage_tracking não existe ou erro: {e}")
+            st.info("Execute o SQL de criação da tabela no Supabase.")
+
+    with tab6:
         st.header("Debug")
         st.info("Limpeza de Chat")
         cid = st.text_input("Chat ID")

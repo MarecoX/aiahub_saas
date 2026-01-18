@@ -123,10 +123,14 @@ def create_knowledge_base_tool(store_id: str):
             logger.info(f"📚 RAG Enterprise (v2-FIX): {store_id} | Query: {query}")
 
             # Padrão Enterprise: Queries usando a tool File Search no generate_content
-            # Usando dicionário para garantir compatibilidade com proto e API REST
+            # Adiciona instrução de idioma para garantir resposta em português
+            prompt_with_lang = (
+                f"Responda em português brasileiro. Busque nos documentos: {query}"
+            )
+
             response = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=query,
+                contents=prompt_with_lang,
                 config={
                     "tools": [{"file_search": {"file_search_store_names": [store_id]}}]
                 },
@@ -137,6 +141,9 @@ def create_knowledge_base_tool(store_id: str):
                 # Limita resposta a 2000 chars para evitar overflow no OpenAI
                 result = response.text[:2000]
                 _rag_cache[cache_key] = result
+
+                # DEBUG: Log o que o Gemini retornou
+                logger.info(f"📚 RAG Response (primeiros 300 chars): {result[:300]}...")
 
                 # Acumula usage do Gemini para tracking
                 global _gemini_usage_accumulator
@@ -149,16 +156,18 @@ def create_knowledge_base_tool(store_id: str):
                     )
 
                 return result
+
+            logger.warning(f"⚠️ RAG retornou resposta vazia para query: {query}")
             return "Sem informações relevantes encontradas nos documentos."
 
         except Exception as e:
-            logger.error(f"Erro RAG Enterprise: {e}")
+            logger.error(f"Erro RAG Enterprise: {e}", exc_info=True)
             return f"Erro ao consultar Base de Conhecimento: {str(e)}"
 
     return StructuredTool.from_function(
         func=search_func,
         name="consultar_documentos_empresa",
-        description="Use esta ferramenta para buscar informações nos manuais, PDFs e arquivos da empresa. O Gemini pesquisará internamente e retornará a resposta baseada nos documentos.",
+        description="Use esta ferramenta para buscar informações nos manuais, PDFs e arquivos da empresa. O Gemini pesquisará internamente e retornará a resposta baseada nos documentos em português",
     )
 
 
@@ -252,7 +261,10 @@ async def ask_saas(
                         f"🚨 Histórico corrompido detectado para {chat_id}. Iniciando Auto-Limpeza..."
                     )
                     await asyncio.to_thread(clear_chat_history, chat_id)
-                    return "⚠️ [Auto-Correção] Detectei um erro na minha memória recente. Reiniciei nosso contexto. Por favor, faça sua pergunta novamente."
+                    return (
+                        "⚠️ [Auto-Correção] Detectei um erro na minha memória recente. Reiniciei nosso contexto. Por favor, faça sua pergunta novamente.",
+                        {"openai": None, "gemini": None},
+                    )
                 raise e
 
             # 4. Processa Resposta
@@ -288,9 +300,13 @@ async def ask_saas(
             else:
                 logger.error("❌ Falha após todas as tentativas de reconexão")
                 return (
-                    "Desculpe, tive um problema de conexão. Por favor, tente novamente."
+                    "Desculpe, tive um problema de conexão. Por favor, tente novamente.",
+                    {"openai": None, "gemini": None},
                 )
 
         except Exception as e:
             logger.error(f"Erro no Agent SaaS: {e}", exc_info=True)
-            return "Desculpe, tive um erro interno ao processar sua solicitação."
+            return "Desculpe, tive um erro interno ao processar sua solicitação.", {
+                "openai": None,
+                "gemini": None,
+            }

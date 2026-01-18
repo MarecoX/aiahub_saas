@@ -2,7 +2,6 @@ import os
 import sys
 import logging
 import asyncio
-import datetime
 import redis.asyncio as redis
 from google import genai
 
@@ -74,7 +73,6 @@ async def check_and_run_followups():
             for row in rows:
                 chat_id = row["chat_id"]
                 client_id = row["client_id"]
-                last_msg_at = row["last_message_at"]
                 current_stage_idx = row["followup_stage"] or 0
                 followup_config = row["followup_config"] or {}
                 tools_config = row["tools_config"] or {}
@@ -100,9 +98,20 @@ async def check_and_run_followups():
                     )
                     continue
 
-                # 2. Check Active Flag
+                # === DEBUG LOGGING (CRÍTICO) ===
+                logger.info(
+                    f"🔍 DEBUG [{chat_id}] followup_config raw: {followup_config}"
+                )
+
+                # 2. Check Active Flag - MAIS ROBUSTO
                 is_active = followup_config.get("active")
-                if str(is_active).lower() != "true":
+
+                # Trata vários formatos: True, "true", "True", 1, "1"
+                active_values = [True, "true", "True", "1", 1]
+                if is_active not in active_values:
+                    logger.info(
+                        f"⏭️ SKIP [{chat_id}]: Follow-up DESATIVADO (active={is_active})"
+                    )
                     continue
 
                 # 3. Check Human Intervention
@@ -115,6 +124,9 @@ async def check_and_run_followups():
                 # 4. Check Stages
                 stages = followup_config.get("stages", [])
                 if not stages or current_stage_idx >= len(stages):
+                    logger.info(
+                        f"⏭️ SKIP [{chat_id}]: No stages configured (stages={len(stages)}, current={current_stage_idx})"
+                    )
                     continue
 
                 stage_cfg = stages[current_stage_idx]

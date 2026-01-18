@@ -15,9 +15,9 @@ PRICES = {
     "openai_output": 0.60 / 1_000_000,
     # OpenAI Whisper
     "whisper_per_minute": 0.006,
-    # Gemini 1.5 Flash
-    "gemini_input": 0.075 / 1_000_000,
-    "gemini_output": 0.30 / 1_000_000,
+    # Gemini 3 Flash (Jan 2026)
+    "gemini_input": 0.50 / 1_000_000,
+    "gemini_output": 3.00 / 1_000_000,  # inclui thinking tokens
     # Vision (por imagem)
     "vision_per_image": 0.00575,
 }

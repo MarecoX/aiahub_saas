@@ -2,6 +2,11 @@ id: lancepilot_native
 namespace: company.team
 description: Fluxo Dedicado para LancePilot (CRM Oficial WhatsApp).
 
+# ⚡ CONTROLE DE CONCORRÊNCIA - Evita esgotar conexões do PostgreSQL
+concurrency:
+  limit: 10
+  behavior: QUEUE
+
 inputs:
   - id: message
     type: JSON

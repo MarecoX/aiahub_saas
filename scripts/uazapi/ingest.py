@@ -8,8 +8,9 @@ import redis.asyncio as redis
 from kestra import Kestra
 
 # Adiciona o diretório shared ao path para importar módulos compartilhados
-sys.path.append(
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
+# Usa insert(0) para dar PRIORIDADE ao shared sobre outros locais
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
 
 from message_handler import handle_message
@@ -84,8 +85,49 @@ async def run_ingest(webhook_data):
 
         logger.info(f"Processando mensagem de: {chat_id}")
 
+        # --- Busca credenciais do cliente para download de mídia ---
+        token = webhook_data.get("token") or webhook_data.get("instanceId")
+        api_url = None
+        api_key = None
+
+        if token:
+            client_config = get_client_config(token)
+            if client_config:
+                # Prioridade: tools_config.uazapi > colunas diretas
+                tools_cfg = client_config.get("tools_config") or {}
+                uazapi_cfg = tools_cfg.get("uazapi", {})
+
+                api_url = uazapi_cfg.get("url") or client_config.get("api_url")
+                api_key = uazapi_cfg.get("api_key") or client_config.get("token")
+        # -----------------------------------------------------------
+
         # 3. Processa Mídia/Texto (Usa lógica central robusta do message_handler)
-        msg_info = await handle_message(message_data)
+        # 3. Processa Mídia/Texto (Usa lógica central robusta do message_handler)
+        # --- SMART CALL v2 (Suporte a versões 1.0, 1.1 e 1.2) ---
+        import inspect
+        try:
+            sig = inspect.signature(handle_message)
+            call_kwargs = {}
+            
+            # Suporte a credenciais (v1.1+)
+            if "api_url" in sig.parameters:
+                call_kwargs["api_url"] = api_url
+                call_kwargs["api_key"] = api_key
+            
+            # Suporte a tracking (v1.2+)
+            if "client_id" in sig.parameters:
+                c_id = client_config.get("id") if token and client_config else None
+                call_kwargs["client_id"] = str(c_id) if c_id else None
+                call_kwargs["chat_id"] = chat_id
+
+            logger.info(f"🚀 Chamando handle_message com args: {list(call_kwargs.keys())}")
+            msg_info = await handle_message(message_data, **call_kwargs)
+
+        except Exception as e:
+            logger.error(f"Erro ao inspecionar/chamar handle_message: {e}")
+            # Fallback de emergência (v1.0)
+            msg_info = await handle_message(message_data)
+        # -------------------------------------------------------------------------------
 
         if not msg_info.should_process:
             logger.info(f"Mensagem ignorada (tipo {msg_info.message_type}).")

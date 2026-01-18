@@ -99,6 +99,20 @@ async def run_rag():
     full_query = " ".join(msgs)
     logger.info(f"💬 Query do Usuário: {full_query}")
 
+    # --- CHECK: Respostas Automáticas (IA) Ativadas? ---
+    tools_config = client_config.get("tools_config") or {}
+    ai_active = tools_config.get(
+        "ai_active", True
+    )  # Default True para retrocompatibilidade
+
+    if not ai_active:
+        logger.info(
+            f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
+        )
+        Kestra.outputs({"response_text": "", "chat_id": chat_id})
+        return
+    # ------------------------------------------------
+
     # 4. Processamento Inteligente (Agente Híbrido: OpenAI + Gemini Tools)
     # Importa aqui para evitar circularidade se houver, ou move para topo
     from chains_saas import ask_saas
@@ -195,6 +209,10 @@ async def run_rag():
     except Exception as e:
         logger.error(f"❌ Erro na Geração IA: {e}", exc_info=True)
         raise e
+    finally:
+        # Garante fechamento da conexão Redis
+        if redis_client:
+            await redis_client.aclose()
 
 
 if __name__ == "__main__":

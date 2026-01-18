@@ -1,5 +1,4 @@
 import os
-import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 import logging
@@ -15,6 +14,9 @@ load_dotenv(os.path.join(current_dir, "..", "..", ".env"))  # IA/.env
 
 # Configuração de Conexão (Priorização: Env > Streamlit Secrets)
 DB_URL = os.getenv("DATABASE_CONNECTION_URI") or os.getenv("DATABASE_URL")
+
+# Pool Size configurável via ENV (default: 5 para evitar esgotar servidor)
+DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "5"))
 
 # Fallback para Streamlit Cloud Secrets (se não encontrou em env vars)
 if not DB_URL:
@@ -45,6 +47,7 @@ else:
 
 # Global Pool variable
 _pool = None
+_table_initialized = False  # Flag para evitar chamadas repetidas
 
 
 def get_connection():
@@ -58,9 +61,13 @@ def get_connection():
         _pool = ConnectionPool(
             conninfo=DB_URL,
             min_size=1,
-            max_size=20,
+            max_size=DB_POOL_MAX_SIZE,  # Configurável via DB_POOL_MAX_SIZE env var
+            timeout=30.0,  # Timeout de 30s antes de desistir
             kwargs={"row_factory": dict_row, "autocommit": True},
             check=ConnectionPool.check_connection,  # Garante que a conexão está viva
+        )
+        logger.info(
+            f"🔌 Pool de conexões PostgreSQL inicializado (max={DB_POOL_MAX_SIZE})"
         )
 
     return _pool.connection()
@@ -134,12 +141,14 @@ def get_client_token_by_phone(phone_number: str):
     """
     Busca o Token do Cliente baseado no número de telefone conectado (LancePilot).
     Agora usa colunas dedicadas em vez de JSONB.
+    ATUALIZADO: Usa pool de conexões ao invés de conexão direta.
     """
     if not DB_URL or not phone_number:
         return None
 
     try:
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
+        # Usa pool ao invés de conexão direta
+        with get_connection() as conn:
             with conn.cursor() as cur:
                 # Busca cliente usando colunas dedicadas
                 sql = """
@@ -172,12 +181,14 @@ def get_client_token_by_waba_phone(phone_id: str):
     """
     Busca o Token do Cliente pesquisando dentro do JSONB tools_config
     pelo campo 'whatsapp_official' -> 'phone_id'.
+    ATUALIZADO: Usa pool de conexões ao invés de conexão direta.
     """
     if not DB_URL or not phone_id:
         return None
 
     try:
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
+        # Usa pool ao invés de conexão direta
+        with get_connection() as conn:
             with conn.cursor() as cur:
                 # Busca cliente onde (tools_config -> 'whatsapp' ->> 'phone_id')
                 # OU (tools_config -> 'whatsapp_official' ->> 'phone_id') match
@@ -356,7 +367,14 @@ def get_all_clients_db():
 
 
 def ensure_chat_messages_table():
-    """Cria a tabela de mensagens se não existir."""
+    """
+    Cria a tabela de mensagens se não existir.
+    LAZY INIT: Só executa uma vez quando realmente precisar.
+    """
+    global _table_initialized
+    if _table_initialized:
+        return  # Já inicializado, não precisa fazer nada
+
     sql = """
     CREATE TABLE IF NOT EXISTS chat_messages (
         id SERIAL PRIMARY KEY,
@@ -373,12 +391,14 @@ def ensure_chat_messages_table():
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
+        _table_initialized = True
+        logger.info("✅ Tabela chat_messages verificada/criada.")
     except Exception as e:
         logger.error(f"❌ Erro ao criar tabela chat_messages: {e}")
 
 
-# Run once on import (safe)
-ensure_chat_messages_table()
+# REMOVIDO: Chamada automática no import causava esgotamento de conexões
+# A tabela será criada na primeira chamada a add_message() se necessário
 
 
 def add_message(
@@ -387,6 +407,9 @@ def add_message(
     """
     Salva uma mensagem no histórico.
     """
+    # Garante que a tabela existe (lazy init)
+    ensure_chat_messages_table()
+
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:

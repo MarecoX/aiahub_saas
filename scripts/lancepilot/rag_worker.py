@@ -90,6 +90,25 @@ async def run_rag():
     full_query = " ".join(msgs)
     logger.info(f"💬 Query do Usuário: {full_query}")
 
+    # --- CHECK: Respostas Automáticas (IA) Ativadas? ---
+    tools_config = client_config.get("tools_config") or {}
+    ai_active = tools_config.get("ai_active", True)
+
+    if not ai_active:
+        logger.info(
+            f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
+        )
+        Kestra.outputs(
+            {
+                "response_text": "",
+                "chat_id": chat_id,
+                "lp_token": "",
+                "lp_workspace": "",
+            }
+        )
+        return
+    # ------------------------------------------------
+
     # 4. Processamento Inteligente
     from chains_saas import ask_saas
 
