@@ -47,31 +47,73 @@ async def run_ingest(webhook_data):
 
         # Ignora mensagens do próprio bot e ATIVA MODO PAUSA (Human Takeover)
         if message_data.get("fromMe"):
+            # Tenta extrair texto para verificar gatilho
+            outgoing_text = ""
+            try:
+                # Adaptação básica de extração (conversa texto ou extendida)
+                outgoing_text = (
+                    message_data.get("textMessage")
+                    or message_data.get("extendedTextMessage", {}).get("text")
+                    or message_data.get("conversation")
+                    or ""
+                )
+            except Exception:
+                pass
+
             logger.info(
-                "👋 Detectada mensagem humana (fromMe=True). Iniciando bloqueio da IA..."
+                f"👋 Detectada mensagem humana (fromMe=True). Verificando Opt-out... Texto: {outgoing_text[:30]}"
             )
 
             try:
                 # Recupera Token para config personalizada
                 token = webhook_data.get("token") or webhook_data.get("instanceId")
                 pause_time_min = 60  # Default
+                is_permanent_stop = False
 
                 if token:
                     client_cfg = get_client_config(token)
-                    if client_cfg and client_cfg.get("human_attendant_timeout"):
-                        pause_time_min = client_cfg["human_attendant_timeout"]
+                    if client_cfg:
+                        # 1. Check Opt-out Trigger
+                        tools_cfg = client_cfg.get("tools_config", {})
+                        stop_cfg = tools_cfg.get("desativar_ia", {})
+                        if isinstance(stop_cfg, bool):
+                            stop_cfg = {"active": stop_cfg}
+
+                        if stop_cfg.get("active") and outgoing_text:
+                            instr = stop_cfg.get("instructions", "")
+                            triggers = [
+                                t.strip() for t in instr.split(",") if t.strip()
+                            ]
+                            if any(t in outgoing_text for t in triggers) or (
+                                "🛑" in outgoing_text
+                            ):
+                                is_permanent_stop = True
+                                logger.info(
+                                    f"🛑 GATILHO DE PARADA TOTAL DETECTADO (UAZAPI): {outgoing_text}"
+                                )
+
+                        # 2. Check Timeout Config
+                        if client_cfg.get("human_attendant_timeout"):
+                            pause_time_min = client_cfg["human_attendant_timeout"]
 
                 pause_ttl = pause_time_min * 60
 
                 # Seta a chave no Redis
                 pause_key = f"ai_paused:{chat_id}"
                 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-                await redis_client.set(pause_key, "true", ex=pause_ttl)
-                await redis_client.aclose()
 
-                logger.warning(
-                    f"🛑 IA PAUSADA por {pause_time_min} min para chat {chat_id} (Trap List Triggered)"
-                )
+                if is_permanent_stop:
+                    await redis_client.set(pause_key, "true_permanent")
+                    logger.info(
+                        f"💀 IA MORTA (Permanente) via Atendente (Uazapi) para {chat_id}"
+                    )
+                else:
+                    await redis_client.set(pause_key, "true", ex=pause_ttl)
+                    logger.warning(
+                        f"🛑 IA PAUSADA por {pause_time_min} min para chat {chat_id} (Trap List Triggered)"
+                    )
+
+                await redis_client.aclose()
 
             except Exception as e:
                 logger.error(f"Erro ao ativar Trap List: {e}")
@@ -105,22 +147,25 @@ async def run_ingest(webhook_data):
         # 3. Processa Mídia/Texto (Usa lógica central robusta do message_handler)
         # --- SMART CALL v2 (Suporte a versões 1.0, 1.1 e 1.2) ---
         import inspect
+
         try:
             sig = inspect.signature(handle_message)
             call_kwargs = {}
-            
+
             # Suporte a credenciais (v1.1+)
             if "api_url" in sig.parameters:
                 call_kwargs["api_url"] = api_url
                 call_kwargs["api_key"] = api_key
-            
+
             # Suporte a tracking (v1.2+)
             if "client_id" in sig.parameters:
                 c_id = client_config.get("id") if token and client_config else None
                 call_kwargs["client_id"] = str(c_id) if c_id else None
                 call_kwargs["chat_id"] = chat_id
 
-            logger.info(f"🚀 Chamando handle_message com args: {list(call_kwargs.keys())}")
+            logger.info(
+                f"🚀 Chamando handle_message com args: {list(call_kwargs.keys())}"
+            )
             msg_info = await handle_message(message_data, **call_kwargs)
 
         except Exception as e:

@@ -111,6 +111,43 @@ def get_client_config(token: str):
         return None
 
 
+def get_client_config_by_id(client_id: str):
+    """
+    Busca as configurações do cliente baseada no ID (UUID).
+    Retorna um dicionário com: id, system_prompt, gemini_store_id, tool_config, etc.
+    """
+    if not DB_URL:
+        logger.error("❌ ERRO CRÍTICO: DATABASE_CONNECTION_URI não definida!")
+        return None
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                sql = """
+                    SELECT id, name, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, token,
+                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config, whatsapp_provider
+                    FROM clients 
+                    WHERE id = %s
+                """
+                cur.execute(sql, (client_id,))
+                result = cur.fetchone()
+
+                if result:
+                    logger.info(
+                        f"✅ Cliente identificado por ID: {result['name']} (ID: {result['id']})"
+                    )
+                    return result
+                else:
+                    logger.warning(
+                        f"⚠️ Nenhum cliente encontrado para o ID: {client_id}"
+                    )
+                    return None
+
+    except Exception as e:
+        logger.error(f"❌ Erro de Banco de Dados: {e}")
+        return None
+
+
 def clear_chat_history(thread_id: str):
     """
     Limpa o histórico persistido (checkpoints) de um chat específico.
@@ -211,6 +248,180 @@ def get_client_token_by_waba_phone(phone_id: str):
                     return None
     except Exception as e:
         logger.error(f"❌ Erro ao buscar cliente via WABA PhoneID: {e}")
+        return None
+
+
+# ============================================================================
+# PROVIDER FUNCTIONS (client_providers table)
+# ============================================================================
+
+
+def get_provider_config(client_id: str, provider_type: str) -> dict:
+    """
+    Busca configuração de um provider específico para um cliente.
+
+    Args:
+        client_id: UUID do cliente
+        provider_type: 'uazapi', 'lancepilot', ou 'meta'
+
+    Returns:
+        dict com config do provider ou {} se não encontrado
+
+    Example:
+        config = get_provider_config("abc-123", "uazapi")
+        url = config.get("url")
+        token = config.get("token")
+    """
+    if not client_id or not provider_type:
+        return {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT config 
+                    FROM client_providers 
+                    WHERE client_id = %s 
+                      AND provider_type = %s 
+                      AND is_active = true
+                    ORDER BY is_default DESC
+                    LIMIT 1
+                """,
+                    (client_id, provider_type),
+                )
+                result = cur.fetchone()
+                if result:
+                    return result["config"] or {}
+                return {}
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar provider config: {e}")
+        return {}
+
+
+def get_default_provider(client_id: str) -> tuple:
+    """
+    Retorna o provider padrão do cliente.
+
+    Returns:
+        tuple: (provider_type, config) ou (None, {}) se não encontrado
+    """
+    if not client_id:
+        return (None, {})
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT provider_type, config 
+                    FROM client_providers 
+                    WHERE client_id = %s 
+                      AND is_default = true 
+                      AND is_active = true
+                    LIMIT 1
+                """,
+                    (client_id,),
+                )
+                result = cur.fetchone()
+                if result:
+                    return (result["provider_type"], result["config"] or {})
+                return (None, {})
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar default provider: {e}")
+        return (None, {})
+
+
+def list_client_providers(client_id: str) -> list:
+    """
+    Lista todos os providers configurados para um cliente.
+
+    Returns:
+        list de dicts com id, provider_type, instance_name, config, is_active, is_default
+    """
+    if not client_id:
+        return []
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, provider_type, instance_name, config, is_active, is_default
+                    FROM client_providers 
+                    WHERE client_id = %s
+                    ORDER BY is_default DESC, provider_type, instance_name
+                """,
+                    (client_id,),
+                )
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar providers: {e}")
+        return []
+
+
+def upsert_provider_config(
+    client_id: str,
+    provider_type: str,
+    config: dict,
+    instance_name: str = "Principal",
+    is_active: bool = True,
+    is_default: bool = False,
+) -> str:
+    """
+    Insere ou atualiza configuração de um provider.
+
+    Returns:
+        UUID do registro criado/atualizado ou None em caso de erro
+    """
+    import json
+
+    if not client_id or not provider_type:
+        return None
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Se is_default=True, desmarcar outros defaults do mesmo tipo
+                if is_default:
+                    cur.execute(
+                        """
+                        UPDATE client_providers 
+                        SET is_default = false 
+                        WHERE client_id = %s AND provider_type = %s
+                    """,
+                        (client_id, provider_type),
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO client_providers 
+                        (client_id, provider_type, instance_name, config, is_active, is_default)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (client_id, provider_type, instance_name) 
+                    DO UPDATE SET 
+                        config = EXCLUDED.config,
+                        is_active = EXCLUDED.is_active,
+                        is_default = EXCLUDED.is_default,
+                        updated_at = NOW()
+                    RETURNING id
+                """,
+                    (
+                        client_id,
+                        provider_type,
+                        instance_name,
+                        json.dumps(config),
+                        is_active,
+                        is_default,
+                    ),
+                )
+                result = cur.fetchone()
+                logger.info(
+                    f"✅ Provider {provider_type} salvo para cliente {client_id}"
+                )
+                return str(result["id"]) if result else None
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar provider: {e}")
         return None
 
 

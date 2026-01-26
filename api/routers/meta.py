@@ -12,8 +12,10 @@ from scripts.meta.meta_client import MetaClient
 from scripts.meta.meta_oauth import exchange_code_for_token
 from scripts.shared.saas_db import (
     get_client_config,
+    get_client_config_by_id,
     update_tools_config_db,
     get_connection,
+    upsert_provider_config,
 )
 from api.models import OAuthCode
 from api.services.meta_service import MetaService
@@ -115,17 +117,17 @@ async def get_signup_static(
 @router.post("/oauth_exchange")
 async def meta_oauth_exchange(payload: OAuthCode):
     """
-    Recebe o code da Meta (Client Side) + Token interno do Cliente.
+    Recebe o code da Meta (Client Side) + Client ID (UUID).
     Troca por Access Token e Salva no Banco.
     Recebe também waba_id e phone_id para salvar.
     """
-    logger.info(f"🔄 [Meta OAuth] Iniciando troca para Token: {payload.token}")
+    logger.info(f"🔄 [Meta OAuth] Iniciando troca para Client ID: {payload.client_id}")
 
-    # 1. Busca configurações do cliente usando o token interno
-    client_config = get_client_config(payload.token)
+    # 1. Busca configurações do cliente usando o ID (UUID)
+    client_config = get_client_config_by_id(payload.client_id)
 
     if not client_config:
-        logger.error(f"❌ Cliente não encontrado para o token: {payload.token}")
+        logger.error(f"❌ Cliente não encontrado para o ID: {payload.client_id}")
         # Debug: List all clients or count them to see if DB is empty
         try:
             with get_connection() as conn:
@@ -139,7 +141,7 @@ async def meta_oauth_exchange(payload: OAuthCode):
         return JSONResponse(
             content={
                 "status": "error",
-                "message": f"Cliente não encontrado (Token: {payload.token})",
+                "message": f"Cliente não encontrado (ID: {payload.client_id})",
             },
             status_code=404,
         )
@@ -181,7 +183,26 @@ async def meta_oauth_exchange(payload: OAuthCode):
     if success:
         logger.info(f"💾 Credenciais Meta salvas para cliente {client_config['id']}")
 
-        # 3.5 Atualiza campo whatsapp_provider para 'meta'
+        # 3.5 Salvar em client_providers (nova estrutura)
+        try:
+            upsert_provider_config(
+                client_id=str(client_config["id"]),
+                provider_type="meta",
+                config={
+                    "access_token": long_lived_token,
+                    "waba_id": waba_id,
+                    "phone_id": phone_id,
+                    "app_id": os.getenv("META_APP_ID"),
+                    "active": True,
+                },
+                is_active=True,
+                is_default=True,
+            )
+            logger.info(f"✅ Config Meta salva em client_providers")
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao salvar em client_providers: {e}")
+
+        # 3.6 Atualiza campo whatsapp_provider para 'meta'
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:

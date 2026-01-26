@@ -55,6 +55,11 @@ class ToolsConfigUpdate(BaseModel):
 
 class OAuthCode(BaseModel):
     code: str
-    token: str  # Token do Cliente para vincular
+    client_id: str = Field(
+        ..., alias="token", description="UUID do Cliente (aceita 'token' como alias)"
+    )  # Aceita 'token' para compatibilidade
     waba_id: Optional[str] = None
     phone_id: Optional[str] = None
+
+    class Config:
+        populate_by_name = True  # Permite usar tanto 'client_id' quanto 'token'

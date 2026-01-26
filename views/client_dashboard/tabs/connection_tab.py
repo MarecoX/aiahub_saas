@@ -2,7 +2,7 @@ import streamlit as st
 import asyncio
 import os
 
-from scripts.shared.saas_db import get_connection
+from scripts.shared.saas_db import get_provider_config, upsert_provider_config
 
 
 def render_connection_tab(user_data):
@@ -32,11 +32,23 @@ def render_connection_tab(user_data):
             disconnect_instance,
         )
 
-    w_config = user_data.get("tools_config", {}).get("whatsapp", {})
+    # Buscar de client_providers (novo) com fallback para colunas (legado)
+    uazapi_cfg = get_provider_config(str(user_data["id"]), "uazapi") or {}
+    if not uazapi_cfg:
+        w_config = user_data.get("tools_config", {}).get("whatsapp", {})
+        uazapi_cfg = {
+            "url": user_data.get("api_url")
+            or w_config.get("url")
+            or os.getenv("UAZAPI_URL")
+            or "",
+            "token": user_data.get("token")
+            or w_config.get("key")
+            or os.getenv("UAZAPI_KEY")
+            or "",
+        }
 
-    # Ordem de prioridade (Client DB > Tools Config > Env Var)
-    api_url = user_data.get("api_url") or w_config.get("url") or os.getenv("UAZAPI_URL")
-    api_key = user_data.get("token") or w_config.get("key") or os.getenv("UAZAPI_KEY")
+    api_url = uazapi_cfg.get("url") or os.getenv("UAZAPI_URL")
+    api_key = uazapi_cfg.get("token") or os.getenv("UAZAPI_KEY")
 
     # Se não tiver URL/Key, permite configurar na hora
     if not api_url or not api_key:
@@ -53,27 +65,18 @@ def render_connection_tab(user_data):
 
             if st.form_submit_button("💾 Salvar Configuração"):
                 try:
-                    # Atualiza tools_config no banco
-                    current_tools = user_data.get("tools_config", {}) or {}
-                    # Garante que é dict
-                    if isinstance(current_tools, str):
-                        import json
+                    # Salvar em client_providers (novo)
+                    upsert_provider_config(
+                        client_id=str(user_data["id"]),
+                        provider_type="uazapi",
+                        config={"url": new_url, "token": new_key},
+                        is_active=True,
+                        is_default=(
+                            user_data.get("whatsapp_provider")
+                            in ["uazapi", "none", "", None]
+                        ),
+                    )
 
-                        current_tools = json.loads(current_tools)
-
-                    current_tools["whatsapp"] = {"url": new_url, "key": new_key}
-
-                    import json
-
-                    with get_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE clients SET tools_config = %s WHERE id = %s",
-                                (json.dumps(current_tools), user_data["id"]),
-                            )
-
-                    # Atualiza memória e recarrega
-                    user_data["tools_config"] = current_tools
                     st.success("Configuração salva! Recarregando...")
                     st.rerun()
                 except Exception as e:

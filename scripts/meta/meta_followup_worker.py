@@ -12,7 +12,7 @@ sys.path.append(
 )
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "meta")))
 
-from saas_db import get_connection
+from saas_db import get_connection, get_provider_config
 from config import REDIS_URL
 from meta_client import MetaClient
 
@@ -83,19 +83,19 @@ async def check_and_run_followups():
                     continue  # Este worker só processa Meta
                 # ----------------------------------------
 
-                # --- CONFIG META (LEGADO - Manter para pegar tokens) ---
-                meta_cfg = tools_config_json.get("whatsapp", {})
-                meta_legacy = tools_config_json.get("whatsapp_official", {})
+                # --- BUSCAR CONFIG META DE client_providers ---
+                meta_cfg = get_provider_config(str(client_id), "meta")
 
-                # Se não tiver config ativa em nenhum lugar, ignora (Uazapi cuida ou ninguém cuida)
-                if not meta_cfg.get("active") and not meta_legacy.get("active"):
-                    continue
+                # Fallback para estrutura antiga
+                if not meta_cfg:
+                    meta_cfg = tools_config_json.get("whatsapp", {})
+                    meta_legacy = tools_config_json.get("whatsapp_official", {})
+                    if not meta_cfg.get("active") and not meta_legacy.get("active"):
+                        continue
+                    meta_cfg = meta_cfg if meta_cfg.get("active") else meta_legacy
 
-                # Prioriza 'whatsapp' (novo)
-                active_cfg = meta_cfg if meta_cfg.get("active") else meta_legacy
-
-                token = active_cfg.get("access_token") or active_cfg.get("token")
-                phone_id = active_cfg.get("phone_id")
+                token = meta_cfg.get("access_token") or meta_cfg.get("token")
+                phone_id = meta_cfg.get("phone_id")
 
                 if not token or not phone_id:
                     logger.warning(

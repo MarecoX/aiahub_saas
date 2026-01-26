@@ -142,39 +142,82 @@ async def run_ingest():
 
     if source == "app":
         logger.info(
-            f"🛑 Mensagem enviada por Humano (App) para {chat_id}. Pausando AI."
+            f"🛑 Mensagem enviada por Humano (App) para {chat_id}. Verificando Opt-out..."
         )
 
-        # Busca Timeout configurado no Banco
-        timeout_seconds = 3600  # Default 1h
+        # Tenta extrair texto da mensagem do App
+        outgoing_text = ""
+        try:
+            outgoing_text = attrs.get("message", {}).get("body", "") or attrs.get(
+                "message", {}
+            ).get("text", {}).get("body", "")
+        except Exception:
+            pass
+
+        # Configs de Cliente
+        timeout_seconds = 3600  # Default
+        is_permanent_stop = False
+
         if webhook_token:
             try:
-                # Busca config completa
                 client_cfg = get_client_config(webhook_token)
                 if client_cfg:
+                    # 1. Verifica se deve Parar Permanentemente (Opt-out Trigger)
+                    tools_cfg = client_cfg.get("tools_config", {})
+                    stop_cfg = tools_cfg.get("desativar_ia", {})
+                    if isinstance(stop_cfg, bool):
+                        stop_cfg = {"active": stop_cfg}
+
+                    if stop_cfg.get("active") and outgoing_text:
+                        instr = stop_cfg.get("instructions", "")
+                        # Checa se o texto contem o gatilho (ex: emoji)
+                        # Logica simples: Se o gatilho estiver contido na mensagem
+                        triggers = [
+                            t.strip() for t in instr.split(",") if t.strip()
+                        ]  # Pode separar por virgula
+                        # Ou check genérico se instrução menciona algo
+                        # Vamos assumir check simples: se o texto for IGUAL ou CONTER emoji
+                        if any(t in outgoing_text for t in triggers) or (
+                            "🛑" in outgoing_text
+                        ):
+                            is_permanent_stop = True
+                            logger.info(
+                                f"🛑 GATILHO DE PARADA TOTAL DETECTADO NA MENSAGEM DO ATENDENTE: {outgoing_text}"
+                            )
+
+                    # 2. Configura Timeout Normal
                     configured_timeout = client_cfg.get("human_attendant_timeout")
                     if configured_timeout:
-                        # O valor no banco é em MINUTOS (ex: 60), converte para Segundos
                         timeout_seconds = int(configured_timeout) * 60
-                        logger.info(
-                            f"⏱️ Tempo de Pausa Configurado: {configured_timeout} min ({timeout_seconds}s)"
-                        )
             except Exception as e:
-                logger.error(f"Erro ao buscar timeout: {e}")
+                logger.error(f"Erro ao buscar config cliente: {e}")
 
-        logger.info(
-            f"🛑 ATIVANDO PAUSA: Chat='{chat_id}' TTL={timeout_seconds}s KEY='ai_paused:{chat_id}'"
-        )
-
-        # Pausa no Redis
         try:
             r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-            await r.set(f"ai_paused:{chat_id}", "true", ex=timeout_seconds)
+            pause_key = f"ai_paused:{chat_id}"
+
+            if is_permanent_stop:
+                # Set SEM expiração = Permanente
+                await r.set(pause_key, "true_permanent")
+                logger.info(f"💀 IA MORTA (Permanente) via Atendente para {chat_id}")
+            else:
+                # Set COM expiração = Pausa Temporária
+                await r.set(pause_key, "true", ex=timeout_seconds)
+                logger.info(
+                    f"🛑 ATIVANDO PAUSA TEMPORÁRIA: {timeout_seconds}s para {chat_id}"
+                )
+
             await r.aclose()
         except Exception as e:
             logger.error(f"Erro Redis Pause: {e}")
 
-        Kestra.outputs({"status": "human_sent_paused", "chat_id": str(chat_id)})
+        Kestra.outputs(
+            {
+                "status": "human_sent_paused",
+                "chat_id": str(chat_id),
+                "mode": "permanent" if is_permanent_stop else "temporary",
+            }
+        )
         return
 
     message_payload = attrs.get("message", {})

@@ -102,3 +102,5 @@ PostgreSQL é a fonte da verdade.
 *   `chat_messages`: Histórico de mensagens (Log).
 
 > **Decisão de Design (ADR-001):** Configurações de ferramentas (ex: Calendar, CEP) são salvas em uma coluna `JSONB` chamada `tools_config` dentro da tabela `clients`. Isso permite flexibilidade sem migrations constantes.
+
+> **Decisão de Design (ADR-002 - 2026-01):** Configurações de **provedores de comunicação** (Uazapi, LancePilot, Meta) foram movidas para a tabela `client_providers`. Isso permite múltiplas instâncias do mesmo provedor por cliente e separação clara de responsabilidades. Os workers usam fallback para estrutura antiga.

@@ -119,50 +119,97 @@ def create_knowledge_base_tool(store_id: str):
             logger.info(f"📚 RAG Cache Hit: {query[:50]}...")
             return _rag_cache[cache_key]
 
-        try:
-            logger.info(f"📚 RAG Enterprise (v2-FIX): {store_id} | Query: {query}")
+        max_retries = 2
+        original_query = query
 
-            # Padrão Enterprise: Queries usando a tool File Search no generate_content
-            # Adiciona instrução de idioma para garantir resposta em português
-            prompt_with_lang = (
-                f"Responda em português brasileiro. Busque nos documentos: {query}"
-            )
+        for attempt in range(max_retries + 1):
+            try:
+                logger.info(
+                    f"📚 RAG Enterprise (v2-FIX): {store_id} | Query: {query} | Attempt: {attempt + 1}"
+                )
 
-            response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt_with_lang,
-                config={
-                    "tools": [{"file_search": {"file_search_store_names": [store_id]}}]
-                },
-            )
+                # Padrão Enterprise: Queries usando a tool File Search no generate_content
+                # Adiciona instrução FORTE de idioma para garantir resposta em português
+                prompt_with_lang = (
+                    f"IMPORTANTE: Responda APENAS em português brasileiro (pt-BR). "
+                    f"NÃO responda em espanhol ou inglês. "
+                    f"NÃO peça mais informações, busque diretamente nos documentos. "
+                    f"Busque nos documentos e responda em português: {query}"
+                )
 
-            # Retorna o texto gerado (que é a resposta baseada nos docs)
-            if response.text:
-                # Limita resposta a 2000 chars para evitar overflow no OpenAI
-                result = response.text[:2000]
-                _rag_cache[cache_key] = result
+                response = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt_with_lang,
+                    config={
+                        "tools": [
+                            {"file_search": {"file_search_store_names": [store_id]}}
+                        ]
+                    },
+                )
 
-                # DEBUG: Log o que o Gemini retornou
-                logger.info(f"📚 RAG Response (primeiros 300 chars): {result[:300]}...")
+                # Retorna o texto gerado (que é a resposta baseada nos docs)
+                if response.text:
+                    # Limita resposta a 2000 chars para evitar overflow no OpenAI
+                    result = response.text[:2000]
 
-                # Acumula usage do Gemini para tracking
-                global _gemini_usage_accumulator
-                if hasattr(response, "usage_metadata") and response.usage_metadata:
-                    _gemini_usage_accumulator["input_tokens"] += getattr(
-                        response.usage_metadata, "prompt_token_count", 0
+                    # DETECÇÃO DE CLARIFICAÇÃO: Se Gemini pediu mais detalhes ao invés de buscar
+                    clarification_indicators = [
+                        "podría",
+                        "podrías",
+                        "¿",
+                        "refiere",
+                        "especificar",
+                        "poderia",
+                        "você quis dizer",
+                        "qual tipo",
+                        "que tipo",
+                        "mais detalhes",
+                        "esclarecer",
+                        "could you",
+                    ]
+                    is_clarification = "?" in result[:200] and any(
+                        indicator in result.lower()[:300]
+                        for indicator in clarification_indicators
                     )
-                    _gemini_usage_accumulator["output_tokens"] += getattr(
-                        response.usage_metadata, "candidates_token_count", 0
+
+                    if is_clarification and attempt < max_retries:
+                        logger.warning(
+                            f"⚠️ RAG pediu clarificação, retry {attempt + 1}/{max_retries}"
+                        )
+                        # Retry com query mais direta
+                        query = f"Liste TODAS as informações disponíveis sobre: {original_query}"
+                        continue
+
+                    # Sucesso - cachear e retornar
+                    _rag_cache[cache_key] = result
+
+                    # DEBUG: Log o que o Gemini retornou
+                    logger.info(
+                        f"📚 RAG Response (primeiros 300 chars): {result[:300]}..."
                     )
 
-                return result
+                    # Acumula usage do Gemini para tracking
+                    global _gemini_usage_accumulator
+                    if hasattr(response, "usage_metadata") and response.usage_metadata:
+                        _gemini_usage_accumulator["input_tokens"] += getattr(
+                            response.usage_metadata, "prompt_token_count", 0
+                        )
+                        _gemini_usage_accumulator["output_tokens"] += getattr(
+                            response.usage_metadata, "candidates_token_count", 0
+                        )
 
-            logger.warning(f"⚠️ RAG retornou resposta vazia para query: {query}")
-            return "Sem informações relevantes encontradas nos documentos."
+                    return result
 
-        except Exception as e:
-            logger.error(f"Erro RAG Enterprise: {e}", exc_info=True)
-            return f"Erro ao consultar Base de Conhecimento: {str(e)}"
+                logger.warning(f"⚠️ RAG retornou resposta vazia para query: {query}")
+                return "Sem informações relevantes encontradas nos documentos."
+
+            except Exception as e:
+                logger.error(f"Erro RAG Enterprise: {e}", exc_info=True)
+                if attempt < max_retries:
+                    continue
+                return f"Erro ao consultar Base de Conhecimento: {str(e)}"
+
+        return "Sem informações relevantes encontradas nos documentos."
 
     return StructuredTool.from_function(
         func=search_func,

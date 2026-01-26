@@ -8,6 +8,7 @@ from scripts.shared.saas_db import (
     get_client_config,
     get_client_token_by_waba_phone,
     add_message,
+    get_provider_config,
 )
 from scripts.shared.chains_saas import ask_saas
 from scripts.meta.meta_client import MetaClient
@@ -62,14 +63,22 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                 if not client_config:
                     continue
 
-                tools = client_config.get("tools_config", {})
-                waba_cfg = tools.get("whatsapp", {}) or tools.get(
-                    "whatsapp_official", {}
-                )
-                if not waba_cfg.get("active"):
+                # Buscar config do provider Meta
+                meta_cfg = get_provider_config(str(client_config["id"]), "meta")
+
+                # Fallback para estrutura antiga
+                if not meta_cfg:
+                    tools = client_config.get("tools_config", {})
+                    meta_cfg = tools.get("whatsapp", {}) or tools.get(
+                        "whatsapp_official", {}
+                    )
+
+                if not meta_cfg.get(
+                    "active", True
+                ):  # Default True para providers migrados
                     continue
 
-                access_token = waba_cfg.get("access_token") or waba_cfg.get("token")
+                access_token = meta_cfg.get("access_token") or meta_cfg.get("token")
                 meta = MetaClient(access_token, phone_id_from_webhook)
 
                 # MESSAGES
@@ -180,7 +189,21 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     response_text = await ask_saas(
                         query=final_text,
                         chat_id=from_phone,
-                        system_prompt=client_config["system_prompt"],
+                    # PREPARE SYSTEM PROMPT (Inject Config)
+                    system_prompt = client_config["system_prompt"]
+                    t_cfg = client_config.get("tools_config", {})
+                    if t_cfg:
+                        stop_cfg = t_cfg.get("desativar_ia", {})
+                        if isinstance(stop_cfg, bool): stop_cfg = {"active": stop_cfg}
+                        if stop_cfg.get("active"):
+                            instr = stop_cfg.get("instructions", "")
+                            if instr:
+                                system_prompt += f"\n\n🚨 **REGRA DE PARADA (OPT-OUT)**:\n{instr}\n👉 SE detectar essa intenção, CHAME A TOOL `desativar_ia` IMEDIATAMENTE."
+                    
+                    response_text = await ask_saas(
+                        query=final_text,
+                        chat_id=from_phone,
+                        system_prompt=system_prompt,
                         client_config=client_config,
                         tools_list=tools_list,
                     )

@@ -66,9 +66,9 @@
         const APP_ID = urlParams.get('app_id') || '825239677170334'; // Fallback
         const CONFIG_ID = urlParams.get('config_id') || '1240691471290119'; // Fallback
         const API_VERSION = urlParams.get('version') || 'v24.0';
-        const CLIENT_TOKEN = urlParams.get('token'); // Captura Token do Cliente para vincular
+        const CLIENT_ID = urlParams.get('client_id') || urlParams.get('token'); // Aceita ambos para compatibilidade
 
-        console.log("Config loaded:", { APP_ID, CONFIG_ID, API_VERSION });
+        console.log("Config loaded:", { APP_ID, CONFIG_ID, API_VERSION, CLIENT_ID });
 
         let capturedWabaId = null;
         let capturedPhoneId = null;
@@ -101,15 +101,15 @@
                 console.log("Code received:", code);
                 document.getElementById("status").textContent = "🔄 Autenticado! Trocando token... (Code: " + code.substring(0, 5) + "...)";
 
-                // Prepare payload
+                // Prepare payload (usando 'token' como campo por compatibilidade com alias do backend)
                 const payload = {
                     code: code,
-                    token: CLIENT_TOKEN,
+                    token: CLIENT_ID,  // Backend aceita 'token' como alias de 'client_id'
                     waba_id: capturedWabaId,
                     phone_id: capturedPhoneId
                 };
 
-                // POST code + token + IDs to our backend
+                // POST code + client_id + IDs to our backend
                 fetch('/api/v1/meta/oauth_exchange', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

@@ -14,7 +14,7 @@ shared_dir = os.path.join(os.path.dirname(current_dir), "shared")
 sys.path.append(shared_dir)
 
 from config import REDIS_URL, BUFFER_KEY_SUFIX  # noqa: E402
-from saas_db import get_client_config, get_connection  # noqa: E402
+from saas_db import get_client_config, get_connection, get_provider_config  # noqa: E402
 from tools_library import get_enabled_tools  # noqa: E402
 
 # Logger
@@ -120,6 +120,17 @@ async def run_rag():
             client_config=client_config,
         )
 
+        # PREPARE SYSTEM PROMPT (Inject Config)
+        t_cfg = client_config.get("tools_config", {})
+        if t_cfg:
+            stop_cfg = t_cfg.get("desativar_ia", {})
+            if isinstance(stop_cfg, bool):
+                stop_cfg = {"active": stop_cfg}
+            if stop_cfg.get("active"):
+                instr = stop_cfg.get("instructions", "")
+                if instr:
+                    system_prompt += f"\n\n🚨 **REGRA DE PARADA (OPT-OUT)**:\n{instr}\n👉 SE detectar essa intenção, CHAME A TOOL `desativar_ia` IMEDIATAMENTE."
+
         # Chama o Cérebro (OpenAI)
         response_text, usage_data = await ask_saas(
             query=full_query,
@@ -168,9 +179,18 @@ async def run_rag():
         # -----------------------
 
         # 5. Output para o Kestra (Task de Envio LancePilot)
-        # Credenciais LancePilot agora vêm de colunas, não JSON
-        lp_token = client_config.get("lancepilot_token") or ""
-        lp_workspace = client_config.get("lancepilot_workspace_id") or ""
+        # Buscar config do provider LancePilot
+        lp_cfg = get_provider_config(str(client_config["id"]), "lancepilot")
+
+        # Fallback para estrutura antiga
+        if not lp_cfg:
+            lp_cfg = {
+                "token": client_config.get("lancepilot_token") or "",
+                "workspace_id": client_config.get("lancepilot_workspace_id") or "",
+            }
+
+        lp_token = lp_cfg.get("token") or ""
+        lp_workspace = lp_cfg.get("workspace_id") or ""
 
         if not lp_token or not lp_workspace:
             logger.warning("⚠️ Configuração LancePilot ausente neste cliente!")

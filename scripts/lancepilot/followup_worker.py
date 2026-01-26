@@ -13,7 +13,7 @@ sys.path.append(shared_dir)
 sys.path.append(scripts_dir)  # For lancepilot.client import
 
 # Imports
-from saas_db import get_connection  # noqa: E402
+from saas_db import get_connection, get_provider_config  # noqa: E402
 from config import REDIS_URL  # noqa: E402
 from lancepilot.client import LancePilotClient  # noqa: E402
 
@@ -84,14 +84,18 @@ async def check_and_run_followups():
                     continue  # Este worker só processa LancePilot
                 # ----------------------------------------
 
-                # 1. VERIFICAR CREDENCIAIS (LEGADO - Manter para pegar tokens)
-                lp_cfg = tools_config.get("lancepilot", {})
-                if not lp_cfg.get("active"):
-                    # Não é cliente LancePilot, ignora (deixe pro worker Uazapi)
-                    continue
+                # 1. BUSCAR CREDENCIAIS DE client_providers
+                lp_cfg = get_provider_config(str(client_id), "lancepilot")
+
+                # Fallback para estrutura antiga
+                if not lp_cfg:
+                    lp_cfg = tools_config.get("lancepilot", {})
+                    if not lp_cfg.get("active"):
+                        continue
 
                 lp_token = lp_cfg.get("token")
                 lp_workspace = lp_cfg.get("workspace_id")
+
                 if not lp_token or not lp_workspace:
                     logger.warning(
                         f"⚠️ Client {client_id} has LP active but missing creds."

@@ -11,7 +11,7 @@ from kestra import Kestra
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
-from saas_db import get_client_config, get_connection
+from saas_db import get_client_config, get_connection, get_provider_config
 from tools_library import get_enabled_tools
 
 # Configuração de Logs
@@ -59,6 +59,22 @@ async def run_rag():
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
     system_prompt = client_config["system_prompt"]
+
+    # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
+    t_cfg = client_config.get("tools_config", {})
+    if t_cfg:
+        # 1. Desativar IA (Opt-out)
+        stop_cfg = t_cfg.get("desativar_ia", {})
+        # Normaliza bool/dict
+        if isinstance(stop_cfg, bool):
+            stop_cfg = {"active": stop_cfg}
+
+        if stop_cfg.get("active"):
+            instr = stop_cfg.get("instructions", "")
+            if instr:
+                system_prompt += f"\n\n🚨 **REGRA DE PARADA (OPT-OUT)**:\n{instr}\n👉 SE detectar essa intenção, CHAME A TOOL `desativar_ia` IMEDIATAMENTE."
+    # ---------------------------------------------
+
     # store_id = client_config['gemini_store_id'] # Futuro: Usar no contexto
 
     # 3. Recuperar Mensagens do Redis (Buffer)
@@ -189,13 +205,20 @@ async def run_rag():
         # 2. Tools Config (whatsapp.url, whatsapp.key)
         # 3. Input Kestra (client_token) para api_key
 
-        tools_cfg = client_config.get("tools_config", {}) or {}
-        w_cfg = tools_cfg.get("whatsapp", {})
+        # Buscar config do provider Uazapi
+        uazapi_cfg = get_provider_config(str(client_config["id"]), "uazapi")
 
-        api_override_url = client_config.get("api_url") or w_cfg.get("url") or ""
-        api_override_key = (
-            client_config.get("token") or w_cfg.get("key") or client_token or ""
-        )
+        # Fallback para estrutura antiga se provider não migrado
+        if not uazapi_cfg:
+            tools_cfg = client_config.get("tools_config", {}) or {}
+            w_cfg = tools_cfg.get("whatsapp", {})
+            uazapi_cfg = {
+                "url": client_config.get("api_url") or w_cfg.get("url") or "",
+                "token": client_config.get("token") or w_cfg.get("key") or "",
+            }
+
+        api_override_url = uazapi_cfg.get("url") or ""
+        api_override_key = uazapi_cfg.get("token") or client_token or ""
 
         Kestra.outputs(
             {

@@ -54,7 +54,7 @@ tasks:
     type: io.kestra.plugin.scripts.python.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: NEVER
+      pullPolicy: ALWAYS
     containerImage: marsllator/my-kestra-worker:latest
     
     namespaceFiles:

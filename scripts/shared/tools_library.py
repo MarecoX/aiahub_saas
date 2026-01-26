@@ -362,8 +362,45 @@ def atendimento_humano(
         logger.info(f"🛑 IA PAUSADA por {timeout_minutes} min para {chat_id}")
         return f"TRANSBORDO_HUMANO_ATIVADO. IA pausada por {timeout_minutes} minutos."
     except Exception as e:
-        logger.error(f"Erro ao pausar IA no Redis: {e}")
         return f"TRANSBORDO_HUMANO_ATIVADO (erro ao pausar: {e})"
+
+
+@tool
+def desativar_ia(
+    motivo: str = "Solicitação do cliente",
+    chat_id: str = None,
+    redis_url: str = None,
+):
+    """
+    Desativa a IA para este cliente PERMANENTEMENTE (Opt-out).
+    Use quando o cliente pedir para 'parar', 'não quero mais mensagens' ou enviar emojis de parada (🛑).
+    A IA não responderá mais até ser reativada manualmente no sistema.
+    Args:
+        motivo (str): Motivo da parada (para log).
+    """
+    import redis
+
+    logger.info(f"🛑 Desativando IA Permanentemente: {motivo} | Chat: {chat_id}")
+    if not chat_id:
+        logger.warning("⚠️ chat_id não fornecido para desativar_ia. Pausa não ativada.")
+        return "ERRO: chat_id ausente."
+
+    if not redis_url:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+    try:
+        r = redis.Redis.from_url(redis_url, decode_responses=True)
+        pause_key = f"ai_paused:{chat_id}"
+
+        # Set SEM data de expiração (Persistente)
+        r.set(pause_key, "true_permanent")
+        r.close()
+
+        logger.info(f"💀 IA MORTA (Pausada para sempre) para {chat_id}")
+        return "IA_DESATIVADA_COM_SUCESSO. O cliente não receberá mais respostas automáticas."
+    except Exception as e:
+        logger.error(f"Erro ao desativar IA no Redis: {e}")
+        return f"ERRO_AO_DESATIVAR_IA: {e}"
 
 
 # Mapa de Funções Disponíveis (Nome no JSON do DB -> Função Python)
@@ -373,6 +410,7 @@ AVAILABLE_TOOLS = {
     "consultar_erp": consultar_erp,
     "enviar_relatorio": enviar_relatorio,
     "atendimento_humano": atendimento_humano,
+    "desativar_ia": desativar_ia,
     "audio": audio,
 }
 
@@ -464,20 +502,26 @@ def get_enabled_tools(
                     # Injeta dependencias (grupo_id, uazapi, template)
                     grupo_cfg = config_dict.get("grupo_id", "")
                     template_cfg = config_dict.get("template", "")
-                    # Extrai placeholders do template para gerar description dinâmica
+
+                    # 1. Extrai placeholders do template
                     import re
+                    from pydantic import create_model
 
                     placeholders = (
                         re.findall(r"\{\{(\w+)\}\}", template_cfg)
                         if template_cfg
                         else []
                     )
+                    # Remove duplicatas mantendo ordem
+                    placeholders = list(dict.fromkeys(placeholders))
+
                     placeholders_str = (
                         ", ".join(placeholders)
                         if placeholders
                         else "nome, cpf, email, telefone, etc."
                     )
-                    # Uazapi vem da config global do cliente (DB) ou Env Var (Fallback)
+
+                    # Uazapi configs
                     uazapi_url_cfg = ""
                     uazapi_token_cfg = ""
                     if client_config:
@@ -493,14 +537,16 @@ def get_enabled_tools(
                         logger.info(
                             f"🔍 DEBUG UAZAPI CONFIG: Url={uazapi_url_cfg}, Token={uazapi_token_cfg}"
                         )
+
                     if not uazapi_url_cfg:
                         uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
                     if not uazapi_token_cfg:
                         uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
+
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
                     )
-                    # Extrai telefone do chat_id (ex: 556199673672@s.whatsapp.net -> 556199673672)
+
                     telefone_from_chat = ""
                     if chat_id and "@" in str(chat_id):
                         telefone_from_chat = str(chat_id).split("@")[0]
@@ -508,18 +554,46 @@ def get_enabled_tools(
                             f"📱 Telefone extraído do chat_id: {telefone_from_chat}"
                         )
 
-                    def create_relatorio_wrapper(f, grp, url, tkn, tpl, telefone_auto):
-                        def wrapped_relatorio(tipo: str = "ficha", dados: dict = None):
+                    # 2. Wrapper que aceita **kwargs dinâmicos
+                    def create_relatorio_wrapper(
+                        f, grp, url, tkn, tpl, telefone_auto, known_fields
+                    ):
+                        def wrapped_relatorio(tipo: str = "ficha", **kwargs):
                             """Envia um relatório para o grupo de vendas no WhatsApp."""
-                            # Auto-injeta telefone se não foi preenchido pela IA
-                            dados_final = dados or {}
-                            if telefone_auto and "telefone" not in dados_final:
-                                dados_final["telefone"] = telefone_auto
-                                logger.info(
-                                    f"📱 Telefone auto-injetado: {telefone_auto}"
+
+                            # Reconstrói o dict 'dados' a partir dos kwargs
+                            dados_final = {
+                                k: v for k, v in kwargs.items() if k in known_fields
+                            }
+
+                            # Injeta campos extras que podem ter vindo soltos mas não estavam no template (fallback)
+                            # ou se o modelo mandou 'dados' como dict explicitamente (retrocompatibilidade)
+                            if "dados" in kwargs and isinstance(kwargs["dados"], dict):
+                                dados_final.update(kwargs["dados"])
+
+                            # Auto-injeta ou corrige telefone
+                            tel_candidato = dados_final.get("telefone", "")
+                            # Limpa caracteres não numéricos para checagem
+                            tel_limpo = "".join(filter(str.isdigit, str(tel_candidato)))
+
+                            # Regra de Robustez: Se telefone for inválido (<10 digitos, ex: CEP 8 dig) E tivermos o do chat
+                            if telefone_auto:
+                                if not tel_candidato or len(tel_limpo) < 10:
+                                    logger.warning(
+                                        f"⚠️ Telefone inválido detectado ('{tel_candidato}'). Substituindo pelo do Chat ID: {telefone_auto}"
+                                    )
+                                    dados_final["telefone"] = telefone_auto
+                                else:
+                                    # Se válido, mantém (pode ser outro número que o cliente passou)
+                                    pass
+                            elif not tel_candidato:
+                                # Sem telefone no chat e sem na tool -> Log de aviso
+                                logger.warning(
+                                    "⚠️ Relatório sem telefone! (Chat ID inválido e IA não extraiu)"
                                 )
+
                             logger.info(
-                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}, url={url}"
+                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}"
                             )
                             return f(
                                 tipo=tipo,
@@ -532,20 +606,31 @@ def get_enabled_tools(
 
                         return wrapped_relatorio
 
-                    # Schema Pydantic DINÂMICO baseado no template
-                    class EnviarRelatorioInput(BaseModel):
-                        tipo: str = Field(
-                            default="ficha",
-                            description="Tipo do relatório: ficha, reserva ou pedido",
+                    # 3. Cria Schema Pydantic DINÂMICO
+                    # Define os campos dinâmicos baseados no template
+                    field_definitions = {
+                        "tipo": (
+                            str,
+                            Field(
+                                default="ficha",
+                                description="Tipo do relatório (ficha, pedido, etc)",
+                            ),
+                        ),
+                    }
+
+                    for field_name in placeholders:
+                        field_definitions[field_name] = (
+                            Optional[str],
+                            Field(
+                                default=None,
+                                description=f"Valor para o campo '{field_name}' extraído da conversa",
+                            ),
                         )
-                        dados: dict = Field(
-                            ...,
-                            description=f"""Dicionário OBRIGATÓRIO com os dados do cliente.
-Você DEVE preencher TODAS estas chaves extraindo os dados da conversa: {placeholders_str}
-Para cada chave, extraia o valor correspondente da conversa com o cliente.
-Se algum dado não foi coletado, pergunte ao cliente antes de chamar esta ferramenta.
-Exemplo: {{"nome": "João Silva", "cpf": "123.456.789-00", ...}}""",
-                        )
+
+                    # Cria o modelo dinamicamente
+                    DynamicInputModel = create_model(
+                        "EnviarRelatorioInput", **field_definitions
+                    )
 
                     tools.append(
                         StructuredTool.from_function(
@@ -556,23 +641,22 @@ Exemplo: {{"nome": "João Silva", "cpf": "123.456.789-00", ...}}""",
                                 uazapi_token_cfg,
                                 template_cfg,
                                 telefone_from_chat,
+                                placeholders,
                             ),
                             name=tool_name,
-                            description=f"""Envia um relatório para o grupo de vendas no WhatsApp.
-QUANDO USAR: Após o cliente confirmar os dados coletados.
-CAMPOS NECESSÁRIOS: {placeholders_str}
-COMO CHAMAR: Passe o parâmetro "dados" com um dicionário contendo os campos acima.
-Extraia os valores da conversa com o cliente.""",
-                            args_schema=EnviarRelatorioInput,
+                            description=f"""Envia um relatório preenchido para o grupo da agência/vendas.
+ATENÇÃO: Extraia os dados da conversa e passe como argumentos individuais.
+Campos esperados: {placeholders_str}""",
+                            args_schema=DynamicInputModel,
                         )
                     )
                     logger.info(
-                        f"🔧 Tool Enviar Relatório Ativada: grupo={grupo_cfg[:20]}... | Campos: {placeholders_str}"
+                        f"🔧 Tool Enviar Relatório Dinâmica: grupo={grupo_cfg[:20]}... | Campos detectados: {placeholders_str}"
                     )
+
                 elif tool_name == "atendimento_humano":
                     # Injeta dependencias (chat_id, timeout, redis_url)
                     # chat_id será passado em runtime, timeout vem da config
-                    timeout_cfg = config_dict.get("timeout_minutes", 60)
                     timeout_cfg = config_dict.get("timeout_minutes", 60)
                     redis_cfg = os.getenv("REDIS_URL", "redis://localhost:6379")
                     fn_captured = (
@@ -603,6 +687,28 @@ Extraia os valores da conversa com o cliente.""",
                     logger.info(
                         f"🔧 Tool Atendimento Humano Ativada: timeout={timeout_cfg}min"
                     )
+                elif tool_name == "desativar_ia":
+                    # Injeta dependencias (chat_id, redis_url)
+                    redis_cfg = os.getenv("REDIS_URL", "redis://localhost:6379")
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
+
+                    def create_stop_wrapper(f, cid, r_url):
+                        def wrapped_stop(motivo: str = "Solicitação do cliente"):
+                            """Desativa a IA permanentemente e para de responder."""
+                            return f(motivo=motivo, chat_id=cid, redis_url=r_url)
+
+                        return wrapped_stop
+
+                    tools.append(
+                        StructuredTool.from_function(
+                            func=create_stop_wrapper(fn_captured, chat_id, redis_cfg),
+                            name=tool_name,
+                            description=tool_func.description,
+                        )
+                    )
+                    logger.info("🔧 Tool Desativar IA Ativada (Opt-out)")
                 else:
                     tools.append(tool_func)
                     logger.info(f"🔧 Tool Ativada: {tool_name}")

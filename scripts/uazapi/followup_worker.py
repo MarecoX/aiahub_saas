@@ -9,7 +9,7 @@ from google import genai
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
-from saas_db import get_connection
+from saas_db import get_connection, get_provider_config
 from uazapi_saas import send_whatsapp_message
 from config import REDIS_URL
 
@@ -259,13 +259,23 @@ async def check_and_run_followups():
                             conn.commit()
                         else:
                             # --- DYNAMIC API CONFIG ---
-                            # Tenta pegar config específica de Uazapi do tools_config
-                            uazapi_cfg = tools_config_json.get("uazapi", {})
-                            custom_url = uazapi_cfg.get("url") or row.get("api_url")
-                            # FIX: Prioridade -> Tools Config > Token da Coluna > Env Var (dentro da lib)
-                            custom_key = uazapi_cfg.get("api_key") or row.get(
-                                "client_token"
-                            )
+                            # Buscar de client_providers
+                            uazapi_cfg = get_provider_config(str(client_id), "uazapi")
+
+                            # Fallback para estrutura antiga
+                            if not uazapi_cfg:
+                                uazapi_cfg = tools_config_json.get("uazapi", {})
+                                uazapi_cfg["url"] = (
+                                    uazapi_cfg.get("url") or row.get("api_url") or ""
+                                )
+                                uazapi_cfg["token"] = (
+                                    uazapi_cfg.get("api_key")
+                                    or row.get("client_token")
+                                    or ""
+                                )
+
+                            custom_url = uazapi_cfg.get("url") or ""
+                            custom_key = uazapi_cfg.get("token") or ""
 
                             # Fallback para Env Vars é tratado dentro de uazapi_saas.py se passarmos None
                             # Mas se custom_url for passado, ele usa.

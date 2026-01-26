@@ -8,7 +8,11 @@ root_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-from scripts.shared.saas_db import get_connection  # noqa: E402
+from scripts.shared.saas_db import (
+    get_connection,
+    get_provider_config,
+    upsert_provider_config,
+)  # noqa: E402
 
 
 def render_tools_tab(user_data):
@@ -61,15 +65,25 @@ def render_tools_tab(user_data):
 
     # --- LancePilot ---
     st.subheader("LancePilot (WhatsApp Oficial)")
-    # Now reads from columns instead of JSON
+
+    # Buscar de client_providers (novo) com fallback para colunas (legado)
+    lp_cfg = get_provider_config(str(user_data["id"]), "lancepilot") or {}
+    if not lp_cfg:
+        lp_cfg = {
+            "token": user_data.get("lancepilot_token", "") or "",
+            "workspace_id": user_data.get("lancepilot_workspace_id", "") or "",
+            "number": user_data.get("lancepilot_number", "") or "",
+            "active": user_data.get("lancepilot_active", False),
+        }
+
     c_lp_active = st.toggle(
         "Ativar Integração LancePilot",
-        value=user_data.get("lancepilot_active", False),
+        value=lp_cfg.get("active", False),
     )
 
-    lp_token = user_data.get("lancepilot_token", "") or ""
-    lp_workspace_id = user_data.get("lancepilot_workspace_id", "") or ""
-    lp_number = user_data.get("lancepilot_number", "") or ""
+    lp_token = lp_cfg.get("token", "") or ""
+    lp_workspace_id = lp_cfg.get("workspace_id", "") or ""
+    lp_number = lp_cfg.get("number", "") or ""
 
     if c_lp_active:
         lp_token = st.text_input(
@@ -269,6 +283,31 @@ def render_tools_tab(user_data):
         )
 
     st.divider()
+
+    # --- Desativar IA (Opt-out) ---
+    st.subheader("🛑 Desativar IA (Opt-out)")
+    stop_cfg = t_config.get("desativar_ia", {})
+    if isinstance(stop_cfg, bool):
+        stop_cfg = {"active": stop_cfg}
+
+    c_stop_active = st.toggle(
+        "Habilitar Desativação Permanente",
+        value=stop_cfg.get("active", False),
+        help="Permite que o cliente pare a IA definitivamente com um comando ou emoji.",
+    )
+
+    s_instructions = stop_cfg.get("instructions", "")
+
+    if c_stop_active:
+        s_instructions = st.text_area(
+            "Gatilhos de Parada (Emojis ou Frases)",
+            value=s_instructions,
+            height=100,
+            placeholder="Ex: Se o cliente enviar 🛑, PARE ou STOP, desative a IA permanentemente.",
+            help="Defina aqui quais intenções ou símbolos devem matar o bot.",
+        )
+
+    st.divider()
     if st.button("💾 Salvar Integrações"):
         new_tools_config = t_config.copy()
         # Save Kommo
@@ -301,6 +340,11 @@ def render_tools_tab(user_data):
             "timeout_minutes": h_timeout if c_handoff_active else 60,
             "instructions": h_instructions if c_handoff_active else "",
         }
+        # Save Desativar IA
+        new_tools_config["desativar_ia"] = {
+            "active": c_stop_active,
+            "instructions": s_instructions if c_stop_active else "",
+        }
 
         try:
             import json
@@ -312,29 +356,21 @@ def render_tools_tab(user_data):
                         "UPDATE clients SET tools_config = %s WHERE id = %s",
                         (json.dumps(new_tools_config), user_data["id"]),
                     )
-                    # Save channel columns separately
-                    cur.execute(
-                        """
-                        UPDATE clients SET
-                            lancepilot_active = %s,
-                            lancepilot_token = %s,
-                            lancepilot_workspace_id = %s,
-                            lancepilot_number = %s
-                        WHERE id = %s
-                        """,
-                        (
-                            c_lp_active,
-                            lp_token if c_lp_active else "",
-                            lp_workspace_id if c_lp_active else "",
-                            lp_number if c_lp_active else "",
-                            user_data["id"],
-                        ),
-                    )
+            # Salvar LancePilot em client_providers
+            upsert_provider_config(
+                client_id=str(user_data["id"]),
+                provider_type="lancepilot",
+                config={
+                    "token": lp_token if c_lp_active else "",
+                    "workspace_id": lp_workspace_id if c_lp_active else "",
+                    "number": lp_number if c_lp_active else "",
+                    "active": c_lp_active,
+                },
+                is_active=c_lp_active,
+                is_default=(user_data.get("whatsapp_provider") == "lancepilot"),
+            )
+
             user_data["tools_config"] = new_tools_config
-            user_data["lancepilot_active"] = c_lp_active
-            user_data["lancepilot_token"] = lp_token
-            user_data["lancepilot_workspace_id"] = lp_workspace_id
-            user_data["lancepilot_number"] = lp_number
             st.success("Configurações salvas!")
         except Exception as e:
             st.error(f"Erro ao salvar: {e}")
