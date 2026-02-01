@@ -40,11 +40,22 @@ async def run_rag():
 
     if not chat_id or chat_id == "None":
         logger.info("Nenhum Chat ID para processar. Encerrando.")
+        Kestra.outputs(
+            {"response_text": "", "chat_id": "", "api_url": "", "api_key": ""}
+        )
         return
 
     if not client_token:
         logger.error(
             "❌ ERRO: KESTRA_CLIENT_TOKEN não fornecido! O Worker não sabe quem é o cliente."
+        )
+        Kestra.outputs(
+            {
+                "response_text": "",
+                "chat_id": chat_id or "",
+                "api_url": "",
+                "api_key": "",
+            }
         )
         return
 
@@ -54,7 +65,14 @@ async def run_rag():
 
     if not client_config:
         logger.error("❌ Cliente não encontrado no Banco de Dados. Abortando.")
-        # Opcional: Mandar msg de erro pro WhatsApp
+        Kestra.outputs(
+            {
+                "response_text": "",
+                "chat_id": chat_id or "",
+                "api_url": "",
+                "api_key": "",
+            }
+        )
         return
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
@@ -93,8 +111,10 @@ async def run_rag():
         await redis_client.delete(cleanup_key)
         await redis_client.close()
 
-        # Output VAZIO para não disparar envio
-        Kestra.outputs({"response_text": "", "chat_id": chat_id})
+        # Output VAZIO para não disparar envio (mas com todas as vars esperadas pelo Flow)
+        Kestra.outputs(
+            {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
+        )
         return
     # -------------------------------
 
@@ -110,10 +130,58 @@ async def run_rag():
 
     if not msgs:
         logger.info(f"Buffer vazio para {chat_id}. Worker duplicado?")
+        await redis_client.aclose()
+        Kestra.outputs(
+            {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
+        )
         return
 
     full_query = " ".join(msgs)
     logger.info(f"💬 Query do Usuário: {full_query}")
+
+    # --- AUTO-DETECT OPT-OUT TRIGGERS (Bypass AI) ---
+    stop_cfg = t_cfg.get("desativar_ia", {}) if t_cfg else {}
+    if isinstance(stop_cfg, bool):
+        stop_cfg = {"active": stop_cfg}
+
+    if stop_cfg.get("active"):
+        trigger_text = stop_cfg.get("instructions", "")
+        # Extrai gatilhos do texto (ex: "Se enviar 👍" -> procura por "👍")
+        # Também aceita padrões como #desativar, 👍, 🛑, etc.
+        import re
+
+        # Pega emojis e hashtags do trigger_text
+        emojis_pattern = r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U0001F44D\U0001F44E👍👎🛑✋✅❌🚫💀]"
+        hashtags_pattern = r"#\w+"
+
+        found_emojis = re.findall(emojis_pattern, trigger_text)
+        found_hashtags = re.findall(hashtags_pattern, trigger_text)
+
+        triggers = found_emojis + found_hashtags + ["#desativar", "#parar"]  # Defaults
+
+        # Verifica se a mensagem do usuário contém algum trigger
+        user_msg_lower = full_query.lower().strip()
+        for trigger in triggers:
+            if trigger.lower() in user_msg_lower or trigger in full_query:
+                logger.info(
+                    f"🛑 TRIGGER DETECTADO: '{trigger}' na mensagem. Desativando IA automaticamente."
+                )
+                # Desativa diretamente no Redis
+                pause_key = f"ai_paused:{chat_id}"
+                await redis_client.set(pause_key, "true_permanent")
+                await redis_client.aclose()
+
+                # Retorna mensagem de confirmação
+                Kestra.outputs(
+                    {
+                        "response_text": "✅ Entendido! A IA foi desativada para você. Um atendente humano assumirá a partir de agora.",
+                        "chat_id": chat_id,
+                        "api_url": client_config.get("api_url", ""),
+                        "api_key": client_config.get("token", ""),
+                    }
+                )
+                return
+    # -----------------------------------------------
 
     # --- CHECK: Respostas Automáticas (IA) Ativadas? ---
     tools_config = client_config.get("tools_config") or {}
@@ -125,7 +193,9 @@ async def run_rag():
         logger.info(
             f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
         )
-        Kestra.outputs({"response_text": "", "chat_id": chat_id})
+        Kestra.outputs(
+            {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
+        )
         return
     # ------------------------------------------------
 

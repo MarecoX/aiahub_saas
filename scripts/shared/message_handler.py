@@ -42,7 +42,7 @@ async def download_and_process_media(
     api_url: str = None,
     api_key: str = None,
     client_id: str = None,  # ← Parametro tracking
-    chat_id: str = None,    # ← Parametro tracking
+    chat_id: str = None,  # ← Parametro tracking
 ) -> tuple[str, str | None]:
     """
     Baixa e processa mídia usando UAZAPI com transcrição automática.
@@ -106,7 +106,7 @@ async def download_and_process_media(
         if media_type == "audio" and data.get("transcription"):
             text = data["transcription"].strip()
             logger.info(f"✅ Áudio transcrito: {text[:60]}...")
-            
+
             # --- TRACKING: Contabiliza Whisper ---
             if client_id and chat_id:
                 try:
@@ -116,14 +116,16 @@ async def download_and_process_media(
                     content = message_data.get("content", {})
                     if isinstance(content, dict):
                         audio_info = content.get("audioMessage", {})
-                        duration = audio_info.get("seconds", 10) # default estimative 10s if not found
-                    
+                        duration = audio_info.get(
+                            "seconds", 10
+                        )  # default estimative 10s if not found
+
                     save_usage(
                         client_id=client_id,
                         chat_id=chat_id,
                         source="media_handler",
                         provider="uazapi",
-                        whisper_seconds=int(duration) or 10
+                        whisper_seconds=int(duration) or 10,
                     )
                 except Exception as e:
                     logger.error(f"⚠️ Falha no tracking de áudio: {e}")
@@ -138,7 +140,9 @@ async def download_and_process_media(
 
             # Análise com Gemini
             if media_type == "image":
-                description = await _analyze_image_with_gemini(base64_data, mime_type)
+                description = await _analyze_image_with_gemini(
+                    base64_data, mime_type, client_id=client_id, chat_id=chat_id
+                )
                 text = f"[IMAGEM ENVIADA PELO USUÁRIO]:\n{description}"
             elif media_type == "document":
                 description = await _analyze_document_with_gemini(base64_data)
@@ -161,7 +165,9 @@ async def download_and_process_media(
         return "", None
 
 
-async def _analyze_image_with_gemini(base64_data: str, mime_type: str) -> str:
+async def _analyze_image_with_gemini(
+    base64_data: str, mime_type: str, client_id: str = None, chat_id: str = None
+) -> str:
     """Analisa imagem em base64 com Gemini (V2 SDK)."""
     try:
         logger.info("Analisando imagem com Gemini...")
@@ -181,6 +187,22 @@ async def _analyze_image_with_gemini(base64_data: str, mime_type: str) -> str:
 
         text = response.text.strip()
         logger.info(f"✅ Imagem analisada: {text[:60]}...")
+
+        # --- TRACKING: Contabiliza Imagem ---
+        if client_id and chat_id:
+            try:
+                save_usage(
+                    client_id=client_id,
+                    chat_id=chat_id,
+                    source="media_handler",
+                    provider="uazapi",
+                    images_count=1,
+                )
+                logger.info(f"📊 Tracking: 1 imagem contabilizada para {client_id}")
+            except Exception as e:
+                logger.error(f"⚠️ Falha no tracking de imagem: {e}")
+        # ------------------------------------
+
         return text
 
     except Exception as e:
@@ -198,7 +220,7 @@ async def _analyze_document_with_gemini(base64_data: str) -> str:
         # Converte Base64 String -> Bytes
         try:
             doc_bytes = base64.b64decode(base64_data)
-        except:
+        except Exception:
             # Fallback se já vier bytes (improvável vindo de JSON, mas seguro)
             doc_bytes = base64_data
 
@@ -288,11 +310,11 @@ def _should_process_message(msg_type: str) -> bool:
 
 
 async def handle_message(
-    message_data: dict, 
-    api_url: str = None, 
+    message_data: dict,
+    api_url: str = None,
     api_key: str = None,
-    client_id: str = None, # ← NOVO
-    chat_id: str = None    # ← NOVO
+    client_id: str = None,  # ← NOVO
+    chat_id: str = None,  # ← NOVO
 ) -> MessageInfo:
     """
     Processa uma mensagem e retorna informações estruturadas.
@@ -312,7 +334,9 @@ async def handle_message(
         msg_type = message_data.get("messageType", "unknown")
         message_id = message_data.get("id", "")
         # Usa o chat_id passado ou tenta extrair (fallback)
-        final_chat_id = chat_id or message_data.get("chatid") or message_data.get("remoteJid")
+        final_chat_id = (
+            chat_id or message_data.get("chatid") or message_data.get("remoteJid")
+        )
 
         # Extrai texto inicial
         text, detected_type = _extract_text_from_content(content, msg_type)
@@ -352,13 +376,13 @@ async def handle_message(
         if category in ["image", "audio", "video", "document"]:
             # ← NOVO: Chamada unificada com CREDENCIAIS + TRACKING
             extracted_text, media_path = await download_and_process_media(
-                message_id, 
-                category, 
-                message_data, 
-                api_url=api_url, 
+                message_id,
+                category,
+                message_data,
+                api_url=api_url,
                 api_key=api_key,
                 client_id=client_id,
-                chat_id=final_chat_id
+                chat_id=final_chat_id,
             )
 
             if extracted_text:

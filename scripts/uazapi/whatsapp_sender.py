@@ -29,7 +29,7 @@ ensure_env("BUFFER_TTL", "300")
 if os.getenv("DATABASE_URL") and not os.getenv("DATABASE_CONNECTION_URI"):
     os.environ["DATABASE_CONNECTION_URI"] = os.getenv("DATABASE_URL")
 
-from uazapi_saas import send_whatsapp_message
+from uazapi_saas import send_whatsapp_message, send_whatsapp_audio
 from message_buffer import _split_natural_messages
 
 # Configura logs para sair no STDOUT (evita ficar vermelho/ERROR no Kestra)
@@ -42,6 +42,8 @@ logger = logging.getLogger("KestraSend")
 
 
 async def run_sender():
+    import re
+
     chat_id = os.getenv("KESTRA_CHAT_ID")
     raw_response = os.getenv("KESTRA_RESPONSE_TEXT")
 
@@ -53,25 +55,50 @@ async def run_sender():
     dynamic_url = os.getenv("KESTRA_API_URL")
     dynamic_key = os.getenv("KESTRA_API_KEY")
 
-    # Usa a função de split centralizada
-    parts = _split_natural_messages(raw_response)
+    # --- DETECT AUDIO URLs ---
+    audio_urls_full = re.findall(
+        r"https?://[^\s]+\.(?:mp3|wav|ogg|m4a|opus)", raw_response, re.IGNORECASE
+    )
 
-    for i, part in enumerate(parts):
+    # Remove audio URLs from text response
+    text_response = raw_response
+    for audio_url in audio_urls_full:
+        text_response = text_response.replace(audio_url, "").strip()
+
+    # Send audio FIRST (if any)
+    for audio_url in audio_urls_full:
         try:
-            # Usa a função de envio centralizada, injetando credentials
-            await send_whatsapp_message(
-                chat_id, part, api_key=dynamic_key, base_url=dynamic_url
+            await send_whatsapp_audio(
+                chat_id, audio_url, api_key=dynamic_key, base_url=dynamic_url
             )
-            logger.info(f"Parte {i + 1}/{len(parts)} enviada.")
+            logger.info(f"🔊 Áudio enviado: {audio_url[:60]}...")
+            await asyncio.sleep(1.5)  # Delay between audio and text
         except Exception as e:
-            logger.error(f"Erro ao enviar parte {i}: {e}")
+            logger.error(f"Erro ao enviar áudio {audio_url}: {e}")
+    # -------------------------
 
-        # Delay pequeno entre mensagens (se houver mais de uma)
-        if i < len(parts) - 1:
-            delay = random.uniform(1.0, 3.0)
-            await asyncio.sleep(delay)
+    # Send text (without audio URLs)
+    if text_response.strip():
+        parts = _split_natural_messages(text_response)
 
-    Kestra.outputs({"status": "sent", "count": len(parts)})
+        for i, part in enumerate(parts):
+            try:
+                await send_whatsapp_message(
+                    chat_id, part, api_key=dynamic_key, base_url=dynamic_url
+                )
+                logger.info(f"Parte {i + 1}/{len(parts)} enviada.")
+            except Exception as e:
+                logger.error(f"Erro ao enviar parte {i}: {e}")
+
+            # Delay pequeno entre mensagens (se houver mais de uma)
+            if i < len(parts) - 1:
+                delay = random.uniform(1.0, 3.0)
+                await asyncio.sleep(delay)
+
+    total_sent = len(audio_urls_full) + (len(parts) if text_response.strip() else 0)
+    Kestra.outputs(
+        {"status": "sent", "count": total_sent, "audios": len(audio_urls_full)}
+    )
 
 
 if __name__ == "__main__":

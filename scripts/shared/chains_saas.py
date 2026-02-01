@@ -226,7 +226,7 @@ def create_saas_agent(system_prompt: str, tools_list: list, store_id: str = None
     Cria um Agente OpenAI usando create_agent e PostgresSaver.
     Injeta dinamicamente o tool de Knowledge Base se store_id for válido.
     """
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, api_key=OPENAI_API_KEY)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, api_key=OPENAI_API_KEY)
 
     final_tools = list(tools_list) if tools_list else []
 
@@ -261,6 +261,8 @@ def create_saas_agent(system_prompt: str, tools_list: list, store_id: str = None
         system_prompt=system_prompt,
         checkpointer=get_checkpointer(),
         middleware=[trim_middleware],
+        # Limita iterações para evitar loops infinitos de tool calls
+        recursion_limit=15,
     )
 
 
@@ -290,8 +292,12 @@ async def ask_saas(
             # 1. Cria o Agente (Passando Store ID)
             agent_runnable = create_saas_agent(system_prompt, tools, store_id=store_id)
 
-            # 2. Config de Execução
-            config = {"configurable": {"thread_id": chat_id}}
+            # 2. Config de Execução (thread_id inclui client_id para isolar contextos)
+            client_id = str(client_config.get("id", "unknown"))
+            thread_id = (
+                f"{client_id}:{chat_id}"  # Cada cliente SaaS tem histórico separado
+            )
+            config = {"configurable": {"thread_id": thread_id}}
 
             # 3. Executa com Proteção
             try:
@@ -305,9 +311,11 @@ async def ask_saas(
                 error_str = str(e)
                 if "tool_calls" in error_str or "400" in error_str:
                     logger.warning(
-                        f"🚨 Histórico corrompido detectado para {chat_id}. Iniciando Auto-Limpeza..."
+                        f"🚨 Histórico corrompido detectado para {thread_id}. Iniciando Auto-Limpeza..."
                     )
-                    await asyncio.to_thread(clear_chat_history, chat_id)
+                    await asyncio.to_thread(
+                        clear_chat_history, thread_id
+                    )  # Usa thread_id composto
                     return (
                         "⚠️ [Auto-Correção] Detectei um erro na minha memória recente. Reiniciei nosso contexto. Por favor, faça sua pergunta novamente.",
                         {"openai": None, "gemini": None},

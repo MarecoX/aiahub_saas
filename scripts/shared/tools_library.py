@@ -403,6 +403,261 @@ def desativar_ia(
         return f"ERRO_AO_DESATIVAR_IA: {e}"
 
 
+@tool
+def criar_lembrete(
+    quando: str,
+    motivo: str = "Retornar contato conforme solicitado",
+    chat_id: str = None,
+    client_id: str = None,
+):
+    """
+    Cria um lembrete para retornar contato com o cliente em uma data futura.
+    Use quando o cliente pedir para ligar depois, retornar na semana que vem, etc.
+    Args:
+        quando (str): Quando retornar - pode ser "amanhã", "em 3 dias", "semana que vem", "dia 15", "2026-02-10 10:00"
+        motivo (str): Motivo/contexto do lembrete para personalizar a mensagem de retorno.
+    """
+    from datetime import datetime, timedelta
+    import re
+
+    logger.info(
+        f"📅 Criando Lembrete: quando={quando}, motivo={motivo}, chat={chat_id}"
+    )
+
+    if not chat_id:
+        logger.warning("⚠️ chat_id não fornecido para criar_lembrete.")
+        return "ERRO: chat_id ausente."
+
+    if not client_id:
+        logger.warning("⚠️ client_id não fornecido para criar_lembrete.")
+        return "ERRO: client_id ausente."
+
+    # Parseia data natural
+    now = datetime.now()
+    scheduled_at = None
+
+    quando_lower = quando.lower().strip()
+
+    # Padrões de data natural
+    if "amanhã" in quando_lower or "amanha" in quando_lower:
+        scheduled_at = now + timedelta(days=1)
+    elif "depois de amanhã" in quando_lower:
+        scheduled_at = now + timedelta(days=2)
+    elif "semana que vem" in quando_lower or "próxima semana" in quando_lower:
+        scheduled_at = now + timedelta(days=7)
+    elif "mês que vem" in quando_lower or "próximo mês" in quando_lower:
+        scheduled_at = now + timedelta(days=30)
+    elif match := re.search(r"em (\d+)\s*(dias?|horas?|minutos?)", quando_lower):
+        quantidade = int(match.group(1))
+        unidade = match.group(2)
+        if "dia" in unidade:
+            scheduled_at = now + timedelta(days=quantidade)
+        elif "hora" in unidade:
+            scheduled_at = now + timedelta(hours=quantidade)
+        elif "minuto" in unidade:
+            scheduled_at = now + timedelta(minutes=quantidade)
+    elif match := re.search(r"dia (\d{1,2})", quando_lower):
+        dia = int(match.group(1))
+        # Assume mês atual ou próximo
+        try:
+            scheduled_at = now.replace(day=dia)
+            if scheduled_at < now:
+                # Já passou, vai pro próximo mês
+                if now.month == 12:
+                    scheduled_at = scheduled_at.replace(year=now.year + 1, month=1)
+                else:
+                    scheduled_at = scheduled_at.replace(month=now.month + 1)
+        except ValueError:
+            pass
+    else:
+        # Tenta parsear como data ISO
+        try:
+            scheduled_at = datetime.fromisoformat(quando)
+        except ValueError:
+            # Fallback: 3 dias
+            logger.warning(
+                f"⚠️ Não consegui interpretar '{quando}'. Usando 3 dias como padrão."
+            )
+            scheduled_at = now + timedelta(days=3)
+
+    # Define horário padrão às 10h se não especificado
+    if scheduled_at.hour == now.hour and scheduled_at.minute == now.minute:
+        scheduled_at = scheduled_at.replace(hour=10, minute=0, second=0)
+
+    # Salva no banco de dados
+    try:
+        import sys
+
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from saas_db import get_connection
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO reminders (client_id, chat_id, scheduled_at, message, status)
+                    VALUES (%s, %s, %s, %s, 'pending')
+                    RETURNING id
+                """,
+                    (client_id, chat_id, scheduled_at, motivo),
+                )
+                reminder_id = cur.fetchone()["id"]
+
+        logger.info(f"✅ Lembrete criado: ID={reminder_id}, para {scheduled_at}")
+        return f"LEMBRETE_CRIADO_COM_SUCESSO. Vou retornar o contato em {scheduled_at.strftime('%d/%m/%Y às %H:%M')}."
+
+    except Exception as e:
+        logger.error(f"Erro ao criar lembrete: {e}")
+        return f"ERRO_AO_CRIAR_LEMBRETE: {e}"
+
+
+# --- HUBSOFT VIABILIDADE ---
+
+
+def _get_hubsoft_access_token(hubsoft_config: dict) -> str:
+    """Obtém token de acesso OAuth2 da API HubSoft."""
+    api_url = hubsoft_config.get("api_url", "").rstrip("/")
+    client_id = hubsoft_config.get("client_id")
+    client_secret = hubsoft_config.get("client_secret")
+    username = hubsoft_config.get("username")
+    password = hubsoft_config.get("password")
+
+    if not all([api_url, client_id, client_secret, username, password]):
+        raise ValueError(
+            "Configuração HubSoft incompleta. Verifique api_url, client_id, client_secret, username e password."
+        )
+
+    token_url = f"{api_url}/oauth/token"
+    payload = {
+        "grant_type": "password",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "username": username,
+        "password": password,
+    }
+
+    with httpx.Client(timeout=15.0) as client:
+        resp = client.post(token_url, data=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("access_token")
+
+
+@tool
+def consultar_viabilidade_hubsoft(
+    endereco: str,
+    numero: str,
+    bairro: str,
+    cidade: str,
+    estado: str,
+    hubsoft_config: dict = None,
+    raio: int = 250,
+    detalhar_portas: bool = False,
+):
+    """
+    Consulta viabilidade de cobertura de internet em um endereço usando API HubSoft.
+    Use esta tool quando o cliente perguntar se tem cobertura/viabilidade em determinado endereço.
+
+    Args:
+        endereco: Rua ou Avenida (ex: "Rua das Flores")
+        numero: Número da residência (ex: "123")
+        bairro: Bairro (ex: "Centro")
+        cidade: Cidade (ex: "São Paulo")
+        estado: Estado - sigla UF (ex: "SP", "MG", "RJ")
+        raio: Raio de busca em metros (default: 250)
+        detalhar_portas: Se True, retorna detalhes das portas disponíveis
+
+    Returns:
+        Informações de viabilidade com projetos disponíveis na região.
+    """
+    if not hubsoft_config:
+        return {
+            "error": "Configuração HubSoft não encontrada. Entre em contato com o suporte."
+        }
+
+    try:
+        # 1. Obter Access Token
+        access_token = _get_hubsoft_access_token(hubsoft_config)
+        api_url = hubsoft_config.get("api_url", "").rstrip("/")
+
+        # 2. Consultar Viabilidade
+        viab_url = f"{api_url}/api/v1/integracao/mapeamento/viabilidade/consultar"
+        payload = {
+            "tipo_busca": "endereco",
+            "raio": raio,
+            "endereco": {
+                "numero": str(numero),
+                "endereco": endereco,
+                "bairro": bairro,
+                "cidade": cidade,
+                "estado": estado.upper()[:2],  # Garante sigla UF
+            },
+            "detalhar_portas": 1 if detalhar_portas else 0,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+
+        logger.info(
+            f"🌐 HubSoft Viabilidade: Consultando {endereco}, {numero} - {cidade}/{estado}"
+        )
+
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(viab_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # 3. Processar Resposta
+        status = data.get("status", "unknown")
+        if status != "success":
+            msg = data.get("msg", "Erro desconhecido na API HubSoft")
+            logger.warning(f"⚠️ HubSoft retornou status: {status} - {msg}")
+            return {"viavel": False, "mensagem": msg}
+
+        resultado = data.get("resultado", {})
+        projetos = resultado.get("projetos", [])
+
+        if not projetos:
+            return {
+                "viavel": False,
+                "mensagem": "Infelizmente não há cobertura disponível neste endereço no momento.",
+                "endereco_consultado": f"{endereco}, {numero} - {bairro}, {cidade}/{estado}",
+            }
+
+        # Formata lista de projetos para o LLM
+        projetos_formatados = []
+        for p in projetos:
+            proj_info = p.get("projeto", {})
+            projetos_formatados.append(
+                {
+                    "id": proj_info.get("id_mapeamento_projeto"),
+                    "nome": proj_info.get("nome"),
+                    "tipo": resultado.get("origem", "desconhecido"),
+                }
+            )
+
+        logger.info(f"✅ HubSoft: {len(projetos_formatados)} projeto(s) encontrado(s)")
+
+        return {
+            "viavel": True,
+            "mensagem": f"Boa notícia! Temos cobertura disponível neste endereço.",
+            "endereco_consultado": f"{endereco}, {numero} - {bairro}, {cidade}/{estado}",
+            "projetos_disponiveis": projetos_formatados,
+            "total_projetos": len(projetos_formatados),
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"❌ Erro HTTP HubSoft: {e.response.status_code} - {e.response.text}"
+        )
+        return {"error": f"Erro na API HubSoft: {e.response.status_code}"}
+    except Exception as e:
+        logger.error(f"❌ Erro ao consultar viabilidade HubSoft: {e}")
+        return {"error": f"Erro ao consultar viabilidade: {str(e)}"}
+
+
 # Mapa de Funções Disponíveis (Nome no JSON do DB -> Função Python)
 AVAILABLE_TOOLS = {
     "consultar_cep": consultar_cep,
@@ -411,7 +666,9 @@ AVAILABLE_TOOLS = {
     "enviar_relatorio": enviar_relatorio,
     "atendimento_humano": atendimento_humano,
     "desativar_ia": desativar_ia,
+    "criar_lembrete": criar_lembrete,
     "audio": audio,
+    "consultar_viabilidade_hubsoft": consultar_viabilidade_hubsoft,
 }
 
 
@@ -561,15 +818,25 @@ def get_enabled_tools(
                         def wrapped_relatorio(tipo: str = "ficha", **kwargs):
                             """Envia um relatório para o grupo de vendas no WhatsApp."""
 
-                            # Reconstrói o dict 'dados' a partir dos kwargs
+                            # Reconstrói o dict 'dados' a partir dos kwargs (FILTRA None e strings vazias)
                             dados_final = {
-                                k: v for k, v in kwargs.items() if k in known_fields
+                                k: v
+                                for k, v in kwargs.items()
+                                if k in known_fields
+                                and v is not None
+                                and str(v).strip() != ""
                             }
 
                             # Injeta campos extras que podem ter vindo soltos mas não estavam no template (fallback)
                             # ou se o modelo mandou 'dados' como dict explicitamente (retrocompatibilidade)
                             if "dados" in kwargs and isinstance(kwargs["dados"], dict):
-                                dados_final.update(kwargs["dados"])
+                                # Também filtra None/vazios do sub-dict
+                                dados_extra = {
+                                    k: v
+                                    for k, v in kwargs["dados"].items()
+                                    if v is not None and str(v).strip() != ""
+                                }
+                                dados_final.update(dados_extra)
 
                             # Auto-injeta ou corrige telefone
                             tel_candidato = dados_final.get("telefone", "")
@@ -591,6 +858,21 @@ def get_enabled_tools(
                                 logger.warning(
                                     "⚠️ Relatório sem telefone! (Chat ID inválido e IA não extraiu)"
                                 )
+
+                            # VALIDAÇÃO: Precisa ter pelo menos 3 campos preenchidos (além de telefone)
+                            campos_validos = [
+                                k for k in dados_final.keys() if k != "telefone"
+                            ]
+                            if len(campos_validos) < 3:
+                                logger.warning(
+                                    f"⚠️ Dados insuficientes para relatório: {len(campos_validos)} campos. Mínimo: 3"
+                                )
+                                campos_faltando = [
+                                    f
+                                    for f in known_fields
+                                    if f not in dados_final and f != "telefone"
+                                ]
+                                return f"Erro: Dados insuficientes para enviar relatório. Colete primeiro: {', '.join(campos_faltando[:5])}..."
 
                             logger.info(
                                 f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}"
@@ -709,6 +991,86 @@ Campos esperados: {placeholders_str}""",
                         )
                     )
                     logger.info("🔧 Tool Desativar IA Ativada (Opt-out)")
+                elif tool_name == "criar_lembrete":
+                    # Injeta dependencias (chat_id, client_id)
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
+                    client_id_value = client_config.get("id") if client_config else None
+
+                    def create_reminder_wrapper(f, cid, clid):
+                        def wrapped_reminder(
+                            quando: str,
+                            motivo: str = "Retornar contato conforme solicitado",
+                        ):
+                            """Cria um lembrete para retornar contato com o cliente em uma data futura."""
+                            return f(
+                                quando=quando,
+                                motivo=motivo,
+                                chat_id=cid,
+                                client_id=clid,
+                            )
+
+                        return wrapped_reminder
+
+                    tools.append(
+                        StructuredTool.from_function(
+                            func=create_reminder_wrapper(
+                                fn_captured, chat_id, client_id_value
+                            ),
+                            name=tool_name,
+                            description=tool_func.description,
+                        )
+                    )
+                    logger.info(f"📅 Tool Criar Lembrete Ativada: chat={chat_id}")
+                elif tool_name == "consultar_viabilidade_hubsoft":
+                    # Injeta dependencias (hubsoft_config)
+                    hubsoft_cfg = {
+                        k: v for k, v in config_value.items() if k != "active"
+                    }
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
+                    # Pega defaults da config
+                    cfg_raio = hubsoft_cfg.get("raio", 250)
+                    cfg_detalhar = hubsoft_cfg.get("detalhar_portas", False)
+
+                    def create_hubsoft_wrapper(
+                        f, h_cfg, default_raio, default_detalhar
+                    ):
+                        def wrapped_hubsoft(
+                            endereco: str,
+                            numero: str,
+                            bairro: str,
+                            cidade: str,
+                            estado: str,
+                        ):
+                            """Consulta viabilidade de cobertura de internet em um endereço usando HubSoft."""
+                            return f(
+                                endereco=endereco,
+                                numero=numero,
+                                bairro=bairro,
+                                cidade=cidade,
+                                estado=estado,
+                                raio=default_raio,
+                                detalhar_portas=default_detalhar,
+                                hubsoft_config=h_cfg,
+                            )
+
+                        return wrapped_hubsoft
+
+                    tools.append(
+                        StructuredTool.from_function(
+                            func=create_hubsoft_wrapper(
+                                fn_captured, hubsoft_cfg, cfg_raio, cfg_detalhar
+                            ),
+                            name=tool_name,
+                            description=tool_func.description,
+                        )
+                    )
+                    logger.info(
+                        f"🔧 Tool HubSoft Viabilidade Ativada: api={hubsoft_cfg.get('api_url', 'N/A')[:30]}... raio={cfg_raio}m"
+                    )
                 else:
                     tools.append(tool_func)
                     logger.info(f"🔧 Tool Ativada: {tool_name}")

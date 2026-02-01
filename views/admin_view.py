@@ -46,9 +46,7 @@ def render_admin_view():
         except:
             return pd.DataFrame()
 
-    def create_client(
-        name, token, prompt, username, password, api_url=None, timeout=60
-    ):
+    def create_client(name, prompt, username, password, timeout=60):
         from scripts.shared.auth_utils import hash_password
 
         try:
@@ -58,27 +56,28 @@ def render_admin_view():
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     sql = """
-                        INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash, whatsapp_provider)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, username, password_hash, whatsapp_provider)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
                     """
                     tools_config = '{"consultar_cep": true}'
-                    data_url = api_url if api_url and api_url.strip() else None
                     cur.execute(
                         sql,
                         (
                             name,
-                            token,
                             prompt,
-                            store_id,  # Use the potentially updated store_id
+                            store_id,
                             tools_config,
                             timeout,
-                            data_url,
                             username,
                             pwd_hash,
-                            "none",  # whatsapp_provider default
+                            "none",  # whatsapp_provider - configurado depois
                         ),
                     )
-            st.success(f"✅ Cliente '{name}' criado (User: {username})!")
+                    new_client_id = cur.fetchone()["id"]
+            st.success(
+                f"✅ Cliente '{name}' criado! Configure o WhatsApp no painel do cliente."
+            )
             return True
         except Exception as e:
             st.error(f"Erro: {e}")
@@ -143,23 +142,25 @@ def render_admin_view():
 
     with tab1:
         st.header("Novo Cliente SaaS")
+        st.info(
+            "💡 Crie o cliente primeiro. O WhatsApp será configurado depois na aba 'Conexão' do painel do cliente."
+        )
+
         c1, c2 = st.columns(2)
         with c1:
             name = st.text_input("Nome da Empresa")
-            token = st.text_input("Token Uazapi / InstanceID")
-            url = st.text_input("API URL (Opcional)")
-        with c2:
-            prompt = st.text_area(
-                "Prompt Inicial", height=100, value="Assistente útil."
-            )
             user = st.text_input("Username de Login (Ex: empresa1)")
             pwd = st.text_input("Senha Inicial", type="password")
+        with c2:
+            prompt = st.text_area(
+                "Prompt Inicial", height=150, value="Você é um assistente útil."
+            )
 
         if st.button("💾 Cadastrar"):
-            if name and token and user and pwd:
-                create_client(name, token, prompt, user, pwd, url)
+            if name and user and pwd:
+                create_client(name, prompt, user, pwd)
             else:
-                st.warning("Preencha todos os campos obrigatórios.")
+                st.warning("Preencha: Nome, Username e Senha.")
 
     with tab2:
         st.dataframe(list_clients(), width="stretch")

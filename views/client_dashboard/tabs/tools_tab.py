@@ -255,6 +255,7 @@ def render_tools_tab(user_data):
 
     # --- Atendimento Humano ---
     st.subheader("🧑‍💼 Atendimento Humano")
+    st.caption("🟢 Uazapi | 🟢 Meta | 🟢 Lancepilot")
     handoff_cfg = t_config.get("atendimento_humano", {})
     if isinstance(handoff_cfg, bool):
         handoff_cfg = {"active": handoff_cfg}
@@ -286,6 +287,7 @@ def render_tools_tab(user_data):
 
     # --- Desativar IA (Opt-out) ---
     st.subheader("🛑 Desativar IA (Opt-out)")
+    st.caption("🟢 Uazapi | 🟡 Meta (parcial) | 🟡 Lancepilot (parcial)")
     stop_cfg = t_config.get("desativar_ia", {})
     if isinstance(stop_cfg, bool):
         stop_cfg = {"active": stop_cfg}
@@ -306,6 +308,86 @@ def render_tools_tab(user_data):
             placeholder="Ex: Se o cliente enviar 🛑, PARE ou STOP, desative a IA permanentemente.",
             help="Defina aqui quais intenções ou símbolos devem matar o bot.",
         )
+
+    st.divider()
+
+    # --- Criar Lembrete ---
+    st.subheader("📅 Criar Lembrete (Follow-up Agendado)")
+    st.caption("🟢 Uazapi | 🟡 Meta (via Template) | 🟡 Lancepilot (via Template)")
+    reminder_cfg = t_config.get("criar_lembrete", {})
+    if isinstance(reminder_cfg, bool):
+        reminder_cfg = {"active": reminder_cfg}
+
+    c_reminder_active = st.toggle(
+        "Habilitar Lembretes Agendados",
+        value=reminder_cfg.get("active", False),
+        help="Permite que a IA agende lembretes para retornar contato com o cliente (ex: 'me ligue semana que vem').",
+    )
+
+    if c_reminder_active:
+        st.info(
+            "A IA entenderá frases como: 'amanhã', 'semana que vem', 'em 3 dias', 'dia 15'."
+        )
+
+    st.divider()
+
+    # --- HubSoft Viabilidade ---
+    st.subheader("🌐 HubSoft - Consulta de Viabilidade")
+    hubsoft_cfg = t_config.get("consultar_viabilidade_hubsoft", {})
+    if isinstance(hubsoft_cfg, bool):
+        hubsoft_cfg = {"active": hubsoft_cfg}
+
+    c_hubsoft_active = st.toggle(
+        "Ativar Consulta de Viabilidade HubSoft",
+        value=hubsoft_cfg.get("active", False),
+        help="Permite que a IA consulte automaticamente se há cobertura de internet no endereço do cliente.",
+    )
+
+    hs_api_url = hubsoft_cfg.get("api_url", "")
+    hs_client_id = hubsoft_cfg.get("client_id", "")
+    hs_client_secret = hubsoft_cfg.get("client_secret", "")
+    hs_username = hubsoft_cfg.get("username", "")
+    hs_password = hubsoft_cfg.get("password", "")
+
+    if c_hubsoft_active:
+        hs_api_url = st.text_input(
+            "URL da API HubSoft",
+            value=hs_api_url,
+            placeholder="https://api.seuprovedor.hubsoft.com.br",
+            help="URL base da API do seu provedor no HubSoft.",
+        )
+        hs1, hs2 = st.columns(2)
+        hs_client_id = hs1.text_input("Client ID", value=hs_client_id)
+        hs_client_secret = hs2.text_input(
+            "Client Secret", value=hs_client_secret, type="password"
+        )
+
+        hs3, hs4 = st.columns(2)
+        hs_username = hs3.text_input("Username (E-mail)", value=hs_username)
+        hs_password = hs4.text_input("Password", value=hs_password, type="password")
+
+        # Opções Adicionais
+        hs5, hs6 = st.columns(2)
+        hs_raio = hs5.selectbox(
+            "Raio de Busca (metros)",
+            options=[250, 500, 750, 1000, 1250, 1500],
+            index=[250, 500, 750, 1000, 1250, 1500].index(hubsoft_cfg.get("raio", 250))
+            if hubsoft_cfg.get("raio", 250) in [250, 500, 750, 1000, 1250, 1500]
+            else 0,
+            help="Distância máxima para buscar pontos de cobertura.",
+        )
+        hs_detalhar_portas = hs6.toggle(
+            "Detalhar Portas",
+            value=hubsoft_cfg.get("detalhar_portas", False),
+            help="Se ativado, retorna detalhes das portas disponíveis/ocupadas.",
+        )
+
+        st.caption(
+            "📌 Dica: Adicione no prompt da IA instruções para sempre perguntar o número da residência antes de consultar viabilidade."
+        )
+    else:
+        hs_raio = 250
+        hs_detalhar_portas = False
 
     st.divider()
     if st.button("💾 Salvar Integrações"):
@@ -345,7 +427,21 @@ def render_tools_tab(user_data):
             "active": c_stop_active,
             "instructions": s_instructions if c_stop_active else "",
         }
-
+        # Save Criar Lembrete
+        new_tools_config["criar_lembrete"] = {
+            "active": c_reminder_active,
+        }
+        # Save HubSoft Viabilidade
+        new_tools_config["consultar_viabilidade_hubsoft"] = {
+            "active": c_hubsoft_active,
+            "api_url": hs_api_url if c_hubsoft_active else "",
+            "client_id": hs_client_id if c_hubsoft_active else "",
+            "client_secret": hs_client_secret if c_hubsoft_active else "",
+            "username": hs_username if c_hubsoft_active else "",
+            "password": hs_password if c_hubsoft_active else "",
+            "raio": hs_raio if c_hubsoft_active else 250,
+            "detalhar_portas": hs_detalhar_portas if c_hubsoft_active else False,
+        }
         try:
             import json
 

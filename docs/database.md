@@ -8,14 +8,34 @@ O Kestra 2.0 utiliza PostgreSQL como fonte única de verdade (Single Source of T
 erDiagram
     clients ||--o{ chat_messages : "possui"
     clients ||--o{ client_files : "possui"
+    clients ||--o{ client_providers : "possui"
+    clients ||--o{ reminders : "possui"
 
     clients {
         UUID id PK "Identificador Único do Tenant"
         VARCHAR name "Nome da Empresa"
-        VARCHAR token UK "Token/PhoneID (Chave de Identificação)"
         TEXT system_prompt "Personalidade da IA"
-        JSONB tools_config "Configurações Flexíveis (NoSQL)"
+        JSONB tools_config "Configurações de TOOLS"
         TIMESTAMP created_at
+    }
+
+    client_providers {
+        UUID id PK
+        UUID client_id FK "Cliente dono"
+        VARCHAR provider_type "uazapi | meta | lancepilot"
+        VARCHAR instance_name "Principal | Loja 2..."
+        JSONB config "Credenciais do provider"
+        BOOLEAN is_active
+        BOOLEAN is_default
+    }
+
+    reminders {
+        UUID id PK
+        UUID client_id FK
+        VARCHAR chat_id "Telefone do lead"
+        TIMESTAMP scheduled_at "Quando enviar"
+        TEXT message "Motivo/contexto"
+        VARCHAR status "pending | sent | cancelled"
     }
 
     active_conversations {
@@ -55,31 +75,65 @@ A tabela mais importante. Cada linha representa um **SaaS Tenant** (uma empresa 
 | Coluna | Tipo | Descrição |
 | :--- | :--- | :--- |
 | `id` | UUID | Gerado automaticamente (`gen_random_uuid()`). Chave Primária. |
-| `token` | VARCHAR | **Crítico.** Usado pelos Webhooks para saber de qual empresa é a mensagem. Pode ser um Token Uazapi ou o PhoneID da Meta. |
-| `tools_config` | JSONB | Armazena configurações dinâmicas (Toggles, Credenciais de API) sem precisar de migração de esquema. |
+| `name` | VARCHAR | Nome da empresa cliente. |
+| `tools_config` | JSONB | Configurações das **Tools da IA** (consultar_cep, enviar_relatorio, criar_lembrete, etc). |
+
+> **ADR-002 (2026-01):** O campo `token` foi **deprecado**. Credenciais de providers agora ficam em `client_providers`.
 
 #### Exemplo de `tools_config` (JSONB):
 ```json
 {
-  "ai_active": true,
-  "start_upper": false,
-  "consultar_cep": {
-    "active": true
-  },
-  "whatsapp": {
-    "url": "https://api.z-api.io/...",
-    "key": "secret-key"
-  }
+  "consultar_cep": {"active": true},
+  "criar_lembrete": {"active": true},
+  "enviar_relatorio": {"active": true, "grupo_id": "123..."},
+  "consultar_viabilidade_hubsoft": {"active": true, "api_url": "...", "client_id": "..."}
 }
 ```
 
-### 2. `active_conversations` (State Machine)
+### 2. `client_providers` (Provedores de Comunicação)
+**Nova tabela (2026-01).** Armazena credenciais dos providers de WhatsApp.
+
+| Coluna | Tipo | Descrição |
+| :--- | :--- | :--- |
+| `id` | UUID | Chave Primária. |
+| `client_id` | UUID | FK para `clients`. |
+| `provider_type` | VARCHAR | `uazapi`, `meta`, ou `lancepilot`. |
+| `instance_name` | VARCHAR | Nome da instância (ex: "Principal", "Loja 2"). |
+| `config` | JSONB | Credenciais específicas do provider. |
+| `is_active` | BOOLEAN | Se está ativo. |
+| `is_default` | BOOLEAN | Se é o provider padrão. |
+
+#### Exemplo de `config` por provider:
+```json
+// Uazapi
+{"url": "https://api.z-api.io/...", "token": "abc123..."}
+
+// Meta (Oficial)
+{"phone_id": "123...", "access_token": "EAA...", "waba_id": "..."}
+
+// LancePilot
+{"token": "...", "workspace_id": "...", "number": "..."}
+```
+
+### 3. `reminders` (Lembretes Agendados)
+**Nova tabela (2026-01).** Armazena lembretes para follow-up agendado.
+
+| Coluna | Tipo | Descrição |
+| :--- | :--- | :--- |
+| `id` | UUID | Chave Primária. |
+| `client_id` | UUID | FK para `clients`. |
+| `chat_id` | VARCHAR | Telefone do lead. |
+| `scheduled_at` | TIMESTAMP | Quando enviar o lembrete. |
+| `message` | TEXT | Motivo/contexto do lembrete. |
+| `status` | VARCHAR | `pending`, `sent`, `cancelled`, `error`. |
+
+### 4. `active_conversations` (State Machine)
 Tabela vital para os **Workers de Follow-up**. Ela mantém o "estado atual" de cada conversa, permitindo que os scripts saibam quem precisa de resposta ou reengajamento.
 *   **Chave Primária Composta:** `(chat_id, client_id)`. Garante 1 estado por cliente/conversa.
 *   **`followup_stage`:** Controla em qual passo do funil de vendas o cliente está.
 *   **`last_context`:** Uma "memória de curto prazo" que os Workers consultam para não perder o fio da meada.
 
-### 3. `chat_messages` (Histórico)
+### 5. `chat_messages` (Histórico)
 Armazena o histórico de conversa para exibir na interface "Inbox 2.0" e para fornecer contexto ("Memória") para a IA.
 *   **Particionamento:** Os dados não são fisicamente separados. A segurança é garantida pela cláusula `WHERE client_id = ...` em todas as queries no `saas_db.py`.
 

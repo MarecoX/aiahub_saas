@@ -186,21 +186,20 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     tools_list = get_enabled_tools(
                         tools, chat_id=from_phone, client_config=client_config
                     )
-                    response_text = await ask_saas(
-                        query=final_text,
-                        chat_id=from_phone,
+
                     # PREPARE SYSTEM PROMPT (Inject Config)
                     system_prompt = client_config["system_prompt"]
                     t_cfg = client_config.get("tools_config", {})
                     if t_cfg:
                         stop_cfg = t_cfg.get("desativar_ia", {})
-                        if isinstance(stop_cfg, bool): stop_cfg = {"active": stop_cfg}
+                        if isinstance(stop_cfg, bool):
+                            stop_cfg = {"active": stop_cfg}
                         if stop_cfg.get("active"):
                             instr = stop_cfg.get("instructions", "")
                             if instr:
                                 system_prompt += f"\n\n🚨 **REGRA DE PARADA (OPT-OUT)**:\n{instr}\n👉 SE detectar essa intenção, CHAME A TOOL `desativar_ia` IMEDIATAMENTE."
-                    
-                    response_text = await ask_saas(
+
+                    response_text, _ = await ask_saas(
                         query=final_text,
                         chat_id=from_phone,
                         system_prompt=system_prompt,
