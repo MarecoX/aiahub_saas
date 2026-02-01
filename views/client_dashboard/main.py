@@ -9,6 +9,7 @@ from views.client_dashboard.tabs.tools_tab import render_tools_tab
 from views.client_dashboard.tabs.whatsapp_tab import render_whatsapp_tab
 from views.client_dashboard.tabs.connection_tab import render_connection_tab
 from views.client_dashboard.tabs.followup_tab import render_followup_tab
+from views.client_dashboard.tabs.monitoring_tab import render_monitoring_tab
 
 # Configure Logger
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +52,7 @@ def render_client_dashboard(user_data):
                 "🔗 Integrações",
                 "📷 WhatsApp (Legacy/QR)",
                 "⏰ Follow-up Autônomo",
+                "📊 Monitoramento",
             ],
             index=0,  # Default to WhatsApp Official as it's the main focus
             label_visibility="collapsed",
@@ -114,3 +116,6 @@ def render_client_dashboard(user_data):
 
     elif selected_page == "⏰ Follow-up Autônomo":
         render_followup_tab(user_data)
+
+    elif selected_page == "📊 Monitoramento":
+        render_monitoring_tab(user_data)

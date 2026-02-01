@@ -65,6 +65,7 @@ def render_admin_view():
                         sql,
                         (
                             name,
+                            None,  # Token opcional (NULL)
                             prompt,
                             store_id,
                             tools_config,
