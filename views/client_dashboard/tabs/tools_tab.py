@@ -385,9 +385,42 @@ def render_tools_tab(user_data):
         st.caption(
             "📌 Dica: Adicione no prompt da IA instruções para sempre perguntar o número da residência antes de consultar viabilidade."
         )
-    else:
         hs_raio = 250
         hs_detalhar_portas = False
+
+    st.divider()
+
+    # --- Cal.com (Agendamento) ---
+    st.subheader("📅 Cal.com (Agendamento)")
+    cal_cfg = t_config.get("cal_dot_com", {})
+    if isinstance(cal_cfg, bool):
+        cal_cfg = {"active": cal_cfg}
+
+    c_cal_active = st.toggle(
+        "Ativar Integração Cal.com",
+        value=cal_cfg.get("active", False),
+        help="Permite que a IA consulte horários e agende reuniões automaticamente.",
+    )
+
+    cal_api_key = cal_cfg.get("api_key", "")
+    cal_event_id = cal_cfg.get("event_type_id", "")
+
+    if c_cal_active:
+        cal_api_key = st.text_input(
+            "API Key (v2)",
+            value=cal_api_key,
+            type="password",
+            help="Chave de API do Cal.com (Configurações > API Keys).",
+        )
+        cal_event_id = st.text_input(
+            "Event Type ID",
+            value=cal_event_id,
+            help="ID do tipo de evento a ser agendado (ex: 12345). Encontre na URL do evento.",
+        )
+        st.caption("A IA poderá: Consultar Agenda, Agendar, Remarcar e Cancelar.")
+    else:
+        cal_api_key = ""
+        cal_event_id = ""
 
     st.divider()
     if st.button("💾 Salvar Integrações"):
@@ -442,6 +475,14 @@ def render_tools_tab(user_data):
             "raio": hs_raio if c_hubsoft_active else 250,
             "detalhar_portas": hs_detalhar_portas if c_hubsoft_active else False,
         }
+
+        # Save Cal.com (v2)
+        new_tools_config["cal_dot_com"] = {
+            "active": c_cal_active,
+            "api_key": cal_api_key if c_cal_active else "",
+            "event_type_id": cal_event_id if c_cal_active else "",
+        }
+
         try:
             import json
 

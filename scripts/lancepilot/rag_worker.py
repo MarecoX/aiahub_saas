@@ -1,6 +1,7 @@
 import os
 import sys
 import redis.asyncio as redis
+from datetime import datetime
 import logging
 import asyncio
 from kestra import Kestra
@@ -50,7 +51,7 @@ async def run_rag():
         return
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
-    system_prompt = client_config["system_prompt"]
+    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
 
     # 3. Recuperar Mensagens do Redis (Buffer)
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)

@@ -31,8 +31,7 @@ if os.getenv("DATABASE_URL") and not os.getenv("DATABASE_CONNECTION_URI"):
     os.environ["DATABASE_CONNECTION_URI"] = os.getenv("DATABASE_URL")
 
 from kestra import Kestra
-from saas_db import get_connection, get_client_config_by_id
-from message_history import get_recent_messages
+from saas_db import get_connection, get_client_config_by_id, get_recent_messages
 from uazapi_saas import send_whatsapp_message
 
 # Configura logs

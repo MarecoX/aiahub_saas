@@ -3,11 +3,14 @@ import os
 import asyncio
 import logging
 import redis.asyncio as redis
+from datetime import datetime
 
 # import google.generativeai as genai  <-- REMOVED DEPRECATED SDK
 from kestra import Kestra
 
-# Adiciona o diretório shared ao path para importar módulos compartilhados
+# Adiciona o diretório raiz ao path para importar scripts.shared...
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+# Adiciona o diretório shared ao path (compatibilidade com imports diretos 'from saas_db')
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
@@ -76,7 +79,7 @@ async def run_rag():
         return
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
-    system_prompt = client_config["system_prompt"]
+    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
 
     # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
     t_cfg = client_config.get("tools_config", {})

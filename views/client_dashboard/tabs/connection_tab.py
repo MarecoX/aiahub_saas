@@ -82,8 +82,36 @@ def render_connection_tab(user_data):
                 except Exception as e:
                     st.error(f"Erro ao salvar: {e}")
     else:
-        if st.button("🔄 Atualizar Status"):
-            st.rerun()
+        # --- EDITAR CONFIGURAÇÃO (Expander) ---
+        with st.expander("⚙️ Editar Configurações de Conexão"):
+            with st.form("edit_whatsapp_config_form"):
+                st.caption(
+                    "Atualize aqui a URL e Token da sua instância Uazapi/Evolution."
+                )
+                edit_url = st.text_input("URL da API", value=api_url or "")
+                edit_key = st.text_input(
+                    "Global API Key / Token", value=api_key or "", type="password"
+                )
+
+                if st.form_submit_button("💾 Atualizar Credenciais"):
+                    try:
+                        upsert_provider_config(
+                            client_id=str(user_data["id"]),
+                            provider_type="uazapi",
+                            config={"url": edit_url, "token": edit_key},
+                            is_active=True,
+                            is_default=True,
+                        )
+                        st.success("Credenciais atualizadas com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar: {e}")
+
+        # --- STATUS DISPLAY ---
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("🔄 Atualizar Status"):
+                st.rerun()
 
         status_data = {}
         try:

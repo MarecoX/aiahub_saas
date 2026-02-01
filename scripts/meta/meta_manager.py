@@ -188,7 +188,10 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     )
 
                     # PREPARE SYSTEM PROMPT (Inject Config)
-                    system_prompt = client_config["system_prompt"]
+                    # PREPARE SYSTEM PROMPT (Inject Config)
+                    from datetime import datetime
+
+                    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
                     t_cfg = client_config.get("tools_config", {})
                     if t_cfg:
                         stop_cfg = t_cfg.get("desativar_ia", {})

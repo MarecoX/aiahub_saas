@@ -41,6 +41,15 @@ def render_admin_view():
                         df = pd.DataFrame(rows)
                         if "id" in df.columns:
                             df["id"] = df["id"].astype(str)
+
+                        # Fix: Converte tools_config para string para evitar ArrowInvalid
+                        if "tools_config" in df.columns:
+                            df["tools_config"] = df["tools_config"].apply(
+                                lambda x: json.dumps(x)
+                                if isinstance(x, (dict, list))
+                                else (str(x) if x else "{}")
+                            )
+
                         return df
                     return pd.DataFrame()
         except:
@@ -208,9 +217,15 @@ def render_admin_view():
             )  # Unique key
             row = df[df["name"] == sel].iloc[0]
 
-            cfg_txt = st.text_area(
-                "JSON Tools", value=json.dumps(row.get("tools_config", {}), indent=2)
-            )
+            # Parseia string JSON de volta para dict para exibir formatado
+            tools_val = row.get("tools_config", "{}")
+            if isinstance(tools_val, str):
+                try:
+                    tools_val = json.loads(tools_val)
+                except:
+                    tools_val = {}
+
+            cfg_txt = st.text_area("JSON Tools", value=json.dumps(tools_val, indent=2))
             to_val = st.number_input(
                 "Timeout", value=row.get("human_attendant_timeout", 60)
             )

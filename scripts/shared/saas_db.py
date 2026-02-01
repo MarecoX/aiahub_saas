@@ -658,6 +658,13 @@ def get_messages(client_id, chat_id: str, limit: int = 50):
         return []
 
 
+def get_recent_messages(client_id, chat_id: str, limit: int = 10):
+    """
+    Alias para get_messages para compatibilidade com workers.
+    """
+    return get_messages(client_id, chat_id, limit)
+
+
 def get_inbox_conversations(client_id):
     """
     Retorna lista de conversas ativas (Baseada na tabela active_conversations).

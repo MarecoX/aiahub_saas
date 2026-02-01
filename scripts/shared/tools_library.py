@@ -18,6 +18,30 @@ else:
     )
 
 
+try:
+    # Tenta importar como se 'shared' estivesse no path (setup do Docker/Kestra)
+    from cal_tools import (
+        get_available_slots,
+        create_booking,
+        reschedule_booking,
+        cancel_booking,
+    )
+except ImportError:
+    # Tenta importar do caminho completo (setup local/IDE)
+    try:
+        from scripts.shared.cal_tools import (
+            get_available_slots,
+            create_booking,
+            reschedule_booking,
+            cancel_booking,
+        )
+    except ImportError:
+        logger.error(
+            "❌ Não foi possível importar cal_tools (nem direto, nem via scripts.shared)"
+        )
+        raise
+
+
 @tool
 def consultar_cep(cep: str):
     """
@@ -491,15 +515,19 @@ def criar_lembrete(
         sys.path.append(os.path.dirname(os.path.abspath(__file__)))
         from saas_db import get_connection
 
+        import uuid
+
+        new_id = str(uuid.uuid4())
+
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO reminders (client_id, chat_id, scheduled_at, message, status)
-                    VALUES (%s, %s, %s, %s, 'pending')
+                    INSERT INTO reminders (id, client_id, chat_id, scheduled_at, message, status)
+                    VALUES (%s, %s, %s, %s, %s, 'pending')
                     RETURNING id
                 """,
-                    (client_id, chat_id, scheduled_at, motivo),
+                    (new_id, client_id, chat_id, scheduled_at, motivo),
                 )
                 reminder_id = cur.fetchone()["id"]
 
@@ -669,6 +697,7 @@ AVAILABLE_TOOLS = {
     "criar_lembrete": criar_lembrete,
     "audio": audio,
     "consultar_viabilidade_hubsoft": consultar_viabilidade_hubsoft,
+    "cal_dot_com": "cal_dot_com",  # Placeholder para group tool
 }
 
 
@@ -689,7 +718,11 @@ def get_enabled_tools(
     """
     tools = []
     if not tools_config:
+        logger.warning("⚠️ Tools Config is empty or None!")
         return []
+
+    logger.info(f"🔍 DEBUG TOOLS CONFIG: Keys={list(tools_config.keys())}")
+
     for tool_name, config_value in tools_config.items():
         if tool_name in AVAILABLE_TOOLS:
             tool_func = AVAILABLE_TOOLS[tool_name]
@@ -1071,6 +1104,103 @@ Campos esperados: {placeholders_str}""",
                     logger.info(
                         f"🔧 Tool HubSoft Viabilidade Ativada: api={hubsoft_cfg.get('api_url', 'N/A')[:30]}... raio={cfg_raio}m"
                     )
+                elif tool_name == "cal_dot_com":
+                    # Injeta dependencias (api_key, event_type_id)
+                    cal_config = config_value if isinstance(config_value, dict) else {}
+                    api_key = cal_config.get("api_key")
+                    event_type_id = cal_config.get("event_type_id")
+
+                    if api_key and event_type_id:
+                        # 1. Consultar Slots
+                        def wrap_slots(days: int = 5):
+                            """Busca horários disponíveis na agenda para os próximos dias."""
+                            return get_available_slots(api_key, event_type_id, days)
+
+                        tools.append(
+                            StructuredTool.from_function(
+                                func=wrap_slots,
+                                name="consultar_agenda",
+                                description="Verifica disponibilidade de horários para agendamento.",
+                            )
+                        )
+
+                        # 2. Agendar
+                        # 2. Agendar
+                        def wrap_book(
+                            start_time: str,
+                            name: str,
+                            email: str,
+                            phone: str = None,
+                            location_type: str = "google-meet",
+                            location_value: str = None,
+                            duration: int = None,
+                            notes: str = None,
+                        ):
+                            """
+                            Realiza o agendamento de uma reunião.
+                            Args:
+                                start_time: Data/hora ISO 8601 (ex: retirado do consultar_agenda).
+                                phone: Telefone com DDI e DDD (obrigatório se for reunião online ou para notificações).
+                                location_type: 'google-meet' (padrão), 'phone' ou 'address'.
+                                location_value: Endereço (se address) ou telefone alternativo.
+                                duration: Duração em minutos (opcional, sobrescreve o padrão do evento).
+                            """
+                            return create_booking(
+                                api_key,
+                                event_type_id,
+                                start_time,
+                                name,
+                                email,
+                                phone,
+                                location_type,
+                                location_value,
+                                duration,
+                                notes,
+                            )
+
+                        tools.append(
+                            StructuredTool.from_function(
+                                func=wrap_book,
+                                name="agendar_reuniao",
+                                description="Agenda reunião. Requer nome, email, telefone e horário. Suporta local (address/google-meet/phone) e duração.",
+                            )
+                        )
+
+                        # 3. Cancelar
+                        def wrap_cancel(
+                            booking_uid: str, reason: str = "Solicitado pelo cliente"
+                        ):
+                            """Cancela um agendamento existente usando o UID."""
+                            return cancel_booking(api_key, booking_uid, reason)
+
+                        tools.append(
+                            StructuredTool.from_function(
+                                func=wrap_cancel,
+                                name="cancelar_reuniao",
+                                description="Cancela uma reunião agendada. Requer o UID do agendamento.",
+                            )
+                        )
+
+                        # 4. Remarcar
+                        def wrap_resched(
+                            booking_uid: str,
+                            new_start_time: str,
+                            reason: str = "Solicitado pelo cliente",
+                        ):
+                            """Remarca um agendamento existente para um novo horário."""
+                            return reschedule_booking(
+                                api_key, booking_uid, new_start_time, reason
+                            )
+
+                        tools.append(
+                            StructuredTool.from_function(
+                                func=wrap_resched,
+                                name="remarcar_reuniao",
+                                description="Muda o horário de uma reunião existente. Requer UID e novo horário.",
+                            )
+                        )
+
+                        logger.info("📅 Tools Cal.com v2 Ativadas!")
                 else:
                     tools.append(tool_func)
                     logger.info(f"🔧 Tool Ativada: {tool_name}")

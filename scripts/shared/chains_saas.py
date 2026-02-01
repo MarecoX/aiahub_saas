@@ -386,9 +386,9 @@ async def ask_saas(
                     }
 
             if messages:
-                return messages[-1].content, usage_data
+                return messages[-1].content, usage_data, messages
             else:
-                return "Erro: Nenhuma resposta gerada.", usage_data
+                return "Erro: Nenhuma resposta gerada.", usage_data, []
 
         except psycopg.OperationalError as e:
             # CONEXÃO STALE - Reconecta e tenta novamente

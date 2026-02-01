@@ -3,6 +3,7 @@ import asyncio
 import os
 import sys
 import base64
+from datetime import datetime
 
 # Ensure root dir is in path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,30 +88,73 @@ def render_simulator_tab(user_data):
                 try:
                     import importlib
                     import scripts.shared.chains_saas
+                    import scripts.shared.tools_library
 
                     importlib.reload(scripts.shared.chains_saas)
-                    from scripts.shared.chains_saas import ask_saas
+                    importlib.reload(scripts.shared.tools_library)
 
-                    # Mock Config
+                    from scripts.shared.chains_saas import ask_saas
+                    from scripts.shared.tools_library import get_enabled_tools
+
+                    # Mock Config Completo
+                    tools_cfg = user_data.get("tools_config", {})
                     mock_config = {
                         "gemini_store_id": user_data.get("store_id"),
                         "id": user_data.get("id"),
+                        "api_url": user_data.get("api_url", ""),
+                        "token": user_data.get("token", ""),
+                        "tools_config": tools_cfg,
                     }
 
+                    # Gera Tools List para o Simulador
+                    chat_sim_id = f"SIM_{user_data['id']}"
+                    tools_list = get_enabled_tools(
+                        tools_cfg, chat_id=chat_sim_id, client_config=mock_config
+                    )
+
                     # Loop assincrono pra rodar ask_saas
-                    # Agora suporta args multimodais
-                    response, usage = asyncio.run(
+                    # Agora suporta args multimodais E Tools
+                    # Retorna response, usage e histórico de mensagens (debug)
+                    response, usage, debug_msgs = asyncio.run(
                         ask_saas(
                             query=prompt_text
                             if prompt_text
                             else "",  # Backend lida com vazio se tiver audio
-                            chat_id=f"SIM_{user_data['id']}",
-                            system_prompt=user_data["system_prompt"],
+                            chat_id=chat_sim_id,
+                            system_prompt=f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{user_data['system_prompt']}",
                             client_config=mock_config,
+                            tools_list=tools_list,
                             image_base64=image_b64,
                             audio_bytes=audio_bytes,
                         )
                     )
+
+                    # Exibe Logs de Pensamento (Tools)
+                    if debug_msgs:
+                        with st.expander("🧠 Processo de Pensamento (Debug Tools)"):
+                            for m in debug_msgs:
+                                # Se for Tool Call (AI Message com tool_calls)
+                                if (
+                                    m.type == "ai"
+                                    and hasattr(m, "tool_calls")
+                                    and m.tool_calls
+                                ):
+                                    for tc in m.tool_calls:
+                                        st.markdown(
+                                            f"🛠️ **Chamando Tool:** `{tc['name']}`"
+                                        )
+                                        st.json(tc["args"])
+
+                                # Se for Tool Output (ToolMessage)
+                                elif m.type == "tool":
+                                    st.markdown(f"✅ **Resultado ({m.name}):**")
+                                    # Tenta mostrar JSON bonito se der, senao texto
+                                    try:
+                                        import json
+
+                                        st.json(json.loads(m.content))
+                                    except:
+                                        st.text(m.content)
 
                     # Exibe resposta
                     st.markdown(response)
