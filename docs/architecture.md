@@ -103,4 +103,16 @@ PostgreSQL é a fonte da verdade.
 
 > **Decisão de Design (ADR-001):** Configurações de ferramentas (ex: Calendar, CEP) são salvas em uma coluna `JSONB` chamada `tools_config` dentro da tabela `clients`. Isso permite flexibilidade sem migrations constantes.
 
-> **Decisão de Design (ADR-002 - 2026-01):** Configurações de **provedores de comunicação** (Uazapi, LancePilot, Meta) foram movidas para a tabela `client_providers`. Isso permite múltiplas instâncias do mesmo provedor por cliente e separação clara de responsabilidades. Os workers usam fallback para estrutura antiga.
+> **Decisão de Design (ADR-002 - 2026-01):** Configurações de **provedores de comunicação** (Uazapi, LancePilot, Meta) foram movidas para a tabela `client_providers`. Isso permite múltiplas instâncias do mesmo provedor por cliente e separação clara de responsabilidades. Os workers usam sistema de fallback para retrocompatibilidade.
+
+## 🔄 Compatibilidade e Migração (Fallback Strategy)
+
+Para garantir que clientes antigos continuem funcionando enquanto migramos para `client_providers`, o sistema implementa a seguinte lógica de prioridade na resolução de credenciais (ex: em `rag_worker.py`):
+
+### Ordem de Resolução (Priority List):
+1.  **Tabela `client_providers` (New):** O sistema busca primeiro por um registro ativo para o `provider_type` correspondente (uazapi, lancepilot, meta).
+2.  **Configuração Legada (`clients` table):** Se não encontrar no provider, busca nas colunas antigas:
+    *   **API URL:** `clients.api_url` ou `clients.tools_config['whatsapp']['url']`
+    *   **Token/Key:** `clients.token` ou `clients.tools_config['whatsapp']['key']`
+
+> **Nota:** O objetivo é depreciar as colunas `token`, `api_url` e `whatsapp_provider` da tabela `clients` após a migração completa de todos os tenants.

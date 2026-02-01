@@ -284,8 +284,6 @@ def create_saas_agent(system_prompt: str, tools_list: list, store_id: str = None
         system_prompt=system_prompt,
         checkpointer=get_checkpointer(),
         middleware=[trim_middleware],
-        # Limita iterações para evitar loops infinitos de tool calls
-        recursion_limit=15,
     )
 
 
@@ -348,7 +346,7 @@ async def ask_saas(
             thread_id = (
                 f"{client_id}:{chat_id}"  # Cada cliente SaaS tem histórico separado
             )
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 15}
 
             # 3. Executa com Proteção
             try:
@@ -412,7 +410,8 @@ async def ask_saas(
 
         except Exception as e:
             logger.error(f"Erro no Agent SaaS: {e}", exc_info=True)
-            return "Desculpe, tive um erro interno ao processar sua solicitação.", {
+            # Retorna o erro real para debug na interface
+            return f"❌ Erro interno no Agente: {str(e)}", {
                 "openai": None,
                 "gemini": None,
             }

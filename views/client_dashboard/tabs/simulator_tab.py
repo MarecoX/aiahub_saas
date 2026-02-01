@@ -85,6 +85,10 @@ def render_simulator_tab(user_data):
             with st.spinner("Pensando..."):
                 # Importa Ask SaaS
                 try:
+                    import importlib
+                    import scripts.shared.chains_saas
+
+                    importlib.reload(scripts.shared.chains_saas)
                     from scripts.shared.chains_saas import ask_saas
 
                     # Mock Config
