@@ -39,6 +39,29 @@ if not OPENAI_API_KEY:
 
 DATABASE_URL = os.environ.get("DATABASE_CONNECTION_URI") or os.getenv("DATABASE_URL")
 
+
+# --- MULTIMODIAL HELPERS ---
+def transcribe_audio(audio_bytes: bytes) -> str:
+    """Transcreve áudio usando OpenAI Whisper."""
+    try:
+        from openai import OpenAI
+        import io
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Cria um arquivo em memória com nome fake .mp3 para o Whisper aceitar
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "audio.mp3"
+
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1", file=audio_file, language="pt"
+        )
+        return transcript.text
+    except Exception as e:
+        logger.error(f"Erro na transcrição de áudio: {e}")
+        return f"[Erro ao transcrever áudio: {e}]"
+
+
 # --- DATABASE / CHECKPOINTER SETUP ---
 # Conexão lazy para evitar conexões stale que o PostgreSQL fecha
 _checkpointer = None
@@ -275,8 +298,36 @@ async def ask_saas(
     system_prompt: str,
     client_config: dict,
     tools_list: list = None,
+    image_base64: str = None,
+    audio_bytes: bytes = None,
 ):
     global _conn, _checkpointer  # Para poder resetar a conexão
+
+    # 1. Processa Áudio (Se houver)
+    if audio_bytes:
+        transcription = await asyncio.to_thread(transcribe_audio, audio_bytes)
+        # Se query veio vazia (só audio), usa a transcrição
+        if not query:
+            query = transcription
+        else:
+            query = f"{query}\n[Transcrição de Áudio]: {transcription}"
+
+    # 2. Constrói Mensagem do Usuário (Multimodal se houver imagem)
+    from langchain_core.messages import HumanMessage
+
+    if image_base64:
+        # GPT-4o aceita lista de conteudos
+        user_content = [
+            {"type": "text", "text": query},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+            },
+        ]
+        user_message = HumanMessage(content=user_content)
+    else:
+        # Texto simples
+        user_message = ("user", query)
 
     tools = tools_list or []
     store_id = client_config.get("gemini_store_id")
@@ -303,7 +354,7 @@ async def ask_saas(
             try:
                 result = await asyncio.to_thread(
                     agent_runnable.invoke,
-                    {"messages": [("user", query)]},
+                    {"messages": [user_message]},
                     config=config,
                 )
             except BadRequestError as e:
