@@ -29,7 +29,7 @@ ensure_env("BUFFER_TTL", "300")
 if os.getenv("DATABASE_URL") and not os.getenv("DATABASE_CONNECTION_URI"):
     os.environ["DATABASE_CONNECTION_URI"] = os.getenv("DATABASE_URL")
 
-from uazapi_saas import send_whatsapp_message, send_whatsapp_audio
+from uazapi_saas import send_whatsapp_message, send_whatsapp_audio, send_whatsapp_media
 from message_buffer import _split_natural_messages
 
 # Configura logs para sair no STDOUT (evita ficar vermelho/ERROR no Kestra)
@@ -55,50 +55,100 @@ async def run_sender():
     dynamic_url = os.getenv("KESTRA_API_URL")
     dynamic_key = os.getenv("KESTRA_API_KEY")
 
-    # --- DETECT AUDIO URLs ---
-    audio_urls_full = re.findall(
-        r"https?://[^\s]+\.(?:mp3|wav|ogg|m4a|opus)", raw_response, re.IGNORECASE
+    # --- SEO/SEQUENTIAL SENDING LOGIC ---
+    # O objetivo é respeitar a ordem: Texto -> Imagem -> Texto -> Video...
+    
+    media_extensions = r"\.(?:mp3|wav|ogg|m4a|opus|mp4|avi|mov|jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|txt|csv)"
+    
+    # Combina Regex para pegar Markdown OU Raw Link
+    # Group 1: Caption (Markdown)
+    # Group 2: URL (Markdown)
+    # Group 3: URL (Raw)
+    pattern = re.compile(
+        r"\[([^\]]*)\]\((https?://[^\)]+" + media_extensions + r")\)|"  # Markdown
+        r"((?<!\()https?://[^\s]+" + media_extensions + r")",           # Raw
+        re.IGNORECASE
     )
 
-    # Remove audio URLs from text response
-    text_response = raw_response
-    for audio_url in audio_urls_full:
-        text_response = text_response.replace(audio_url, "").strip()
+    last_pos = 0
+    total_sent = 0
+    medias_count = 0
+    
+    for match in pattern.finditer(raw_response):
+        # 1. Envia o TEXTO antes da mídia (se houver)
+        pre_text = raw_response[last_pos : match.start()].strip()
+        if pre_text:
+            parts = _split_natural_messages(pre_text)
+            for part in parts:
+                try:
+                    await send_whatsapp_message(
+                        chat_id, part, api_key=dynamic_key, base_url=dynamic_url
+                    )
+                    logger.info(f"📝 Texto enviado: {part[:30]}...")
+                    await asyncio.sleep(random.uniform(1.0, 2.5))
+                    total_sent += 1
+                except Exception as e:
+                    logger.error(f"Erro ao enviar texto: {e}")
 
-    # Send audio FIRST (if any)
-    for audio_url in audio_urls_full:
+        # 2. Prepara a MÍDIA
+        caption = match.group(1) or ""
+        url = match.group(2) or match.group(3)
+        
+        # Limpa legenda se for igual a URL ou vazia
+        if caption.strip() == url.strip() or caption.startswith("http"):
+            caption = ""
+
+        # Determina tipo
+        media_type = "document"
+        ext = url.split(".")[-1].lower()
+        if ext in ["mp3", "wav", "ogg", "m4a", "opus"]:
+            media_type = "audio"
+        elif ext in ["mp4", "avi", "mov"]:
+            media_type = "video"
+        elif ext in ["jpg", "jpeg", "png", "gif", "webp"]:
+            media_type = "image"
+            
+        # 3. Envia a MÍDIA
         try:
-            await send_whatsapp_audio(
-                chat_id, audio_url, api_key=dynamic_key, base_url=dynamic_url
-            )
-            logger.info(f"🔊 Áudio enviado: {audio_url[:60]}...")
-            await asyncio.sleep(1.5)  # Delay between audio and text
+            if media_type == "audio":
+                await send_whatsapp_audio(
+                    chat_id, url, api_key=dynamic_key, base_url=dynamic_url
+                )
+            else:
+                await send_whatsapp_media(
+                    chat_id, 
+                    url, 
+                    media_type=media_type, 
+                    caption=caption, # Envia legenda junto com a mídia (se houver)
+                    api_key=dynamic_key, 
+                    base_url=dynamic_url
+                )
+            logger.info(f"📎 Mídia enviada ({media_type}): {url[:30]}...")
+            medias_count += 1
+            total_sent += 1
+            await asyncio.sleep(1.5) # Tempo para processar mídia
         except Exception as e:
-            logger.error(f"Erro ao enviar áudio {audio_url}: {e}")
-    # -------------------------
+            logger.error(f"Erro ao enviar mídia {url}: {e}")
 
-    # Send text (without audio URLs)
-    if text_response.strip():
-        parts = _split_natural_messages(text_response)
+        last_pos = match.end()
 
-        for i, part in enumerate(parts):
+    # 4. Envia o RESTANTE do texto (pós-última mídia)
+    remaining_text = raw_response[last_pos:].strip()
+    if remaining_text:
+        parts = _split_natural_messages(remaining_text)
+        for part in parts:
             try:
                 await send_whatsapp_message(
                     chat_id, part, api_key=dynamic_key, base_url=dynamic_url
                 )
-                logger.info(f"Parte {i + 1}/{len(parts)} enviada.")
+                logger.info(f"� Texto final enviado: {part[:30]}...")
+                await asyncio.sleep(random.uniform(1.0, 2.0))
+                total_sent += 1
             except Exception as e:
-                logger.error(f"Erro ao enviar parte {i}: {e}")
+                logger.error(f"Erro ao enviar texto final: {e}")
 
-            # Delay pequeno entre mensagens (se houver mais de uma)
-            if i < len(parts) - 1:
-                delay = random.uniform(1.0, 3.0)
-                await asyncio.sleep(delay)
-
-    total_sent = len(audio_urls_full) + (len(parts) if text_response.strip() else 0)
     Kestra.outputs(
-        {"status": "sent", "count": total_sent, "audios": len(audio_urls_full)}
-    )
+        {"status": "sent", "count": total_sent, "medias": medias_count})
 
 
 if __name__ == "__main__":

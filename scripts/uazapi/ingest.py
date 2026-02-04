@@ -257,9 +257,17 @@ async def run_ingest(webhook_data):
                 }
             )
             return
-        # --- FIM COMANDOS ESPECIAIS ---
+        # --- COMANDOS ESPECIAIS (FIM) ---
 
-        buffer_key = f"{chat_id}{BUFFER_KEY_SUFIX}"
+        # 4. Salva no Redis (Buffer) - AGORA NAMESPACED POR CLIENTE
+        
+        # Resolve client_id para segregar buffer
+        client_id_str = "unknown"
+        if token and client_config:
+            client_id_str = str(client_config.get("id", "unknown"))
+            
+        # Chave Isolada: client_id:chat_id_buffer
+        buffer_key = f"{client_id_str}:{chat_id}{BUFFER_KEY_SUFIX}"
 
         redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -273,9 +281,9 @@ async def run_ingest(webhook_data):
             token = webhook_data.get("token") or webhook_data.get("instanceId")
             if token:
                 # Importação lazy ou uso direto se já importado
-                client_cfg = get_client_config(token)
-                if client_cfg:
-                    client_id = client_cfg["id"]
+                # client_cfg is already available from earlier in the function if token is present
+                if client_config:  # Use the client_config retrieved earlier
+                    client_id = client_config["id"]
 
                     with get_connection() as conn:
                         with conn.cursor() as cur:

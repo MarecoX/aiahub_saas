@@ -32,7 +32,7 @@ def verify_login(username: str, password: str):
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, username, password_hash, is_admin, system_prompt, gemini_store_id, api_url, tools_config, human_attendant_timeout, token, whatsapp_provider FROM clients WHERE username = %s",
+                    "SELECT id, name, username, password_hash, is_admin, system_prompt, gemini_store_id, api_url, tools_config, human_attendant_timeout, token, whatsapp_provider, followup_config FROM clients WHERE username = %s",
                     (username,),
                 )
                 user = cur.fetchone()
@@ -62,6 +62,7 @@ def verify_login(username: str, password: str):
                             ),  # Mapeia para store_id
                             "api_url": user.get("api_url", ""),
                             "tools_config": user.get("tools_config", {}),
+                            "followup_config": user.get("followup_config") or {},
                             "timeout": user.get("human_attendant_timeout", 60),
                             "whatsapp_provider": user.get("whatsapp_provider", "none"),
                         }

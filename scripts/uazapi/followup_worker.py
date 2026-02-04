@@ -77,6 +77,27 @@ async def analyze_context(chat_id, instruction):
         return False, None
 
 
+def clean_message_content(text: str) -> str:
+    """Limpa placeholders comuns gerados por alucinação da IA."""
+    import re
+    # Remove variações de [Nome do Cliente], [Seu Nome], Fulano, etc.
+    patterns = [
+        r"\[Nome do Cliente\]",
+        r"\[Nome do Usuário\]",
+        r"\[Insira o Nome\]",
+        r"\[Nome\]",
+        r"Fulano(,? ?\?|!)?",  # Remove "Fulano?", "Fulano!" etc.
+    ]
+    cleaned = text
+    for p in patterns:
+        cleaned = re.sub(p, "", cleaned, flags=re.IGNORECASE)
+    
+    # Remove espaços duplos e pontuações órfãs resultantes da remoção
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"^\s*[,.?!\s]+", "", cleaned) # Remove pontuação no início
+    return cleaned.strip()
+
+
 async def check_and_run_followups():
     logger.info("🔍 Checking for stalled conversations (Refactored)...")
 
@@ -196,18 +217,22 @@ async def check_and_run_followups():
 
                 if diff_minutes >= delay_min:
                     analysis_prompt = f"""
-                    Você é um especialista em atendimento. Analise a conversa abaixo.
+                    Você é um especialista em atendimento. Sua missão é retomar o contato com um cliente que parou de responder.
                     
-                    Histórico Recente:
+                    CONDIÇÃO ATUAL: O CLIENTE parou de responder. VOCÊ (a IA) está aguardando retorno.
+                    
+                    Histórico Recente (Leia com atenção para saber o que foi tratado por último):
                     Last Context: "{last_context_txt[-2000:]}"
-                    (Obs: Pode estar truncado)
+                    
+                    Instrução para esta mensagem de follow-up: "{prompt_behavior}"
 
-                    Instrução de Retomada: "{prompt_behavior}"
-
-                    DECISÃO CRÍTICA:
-                    1. Se o cliente JÁ encerrou, agradeceu, disse que vai aguardar, ou disse que não quer mais nada -> Responda APENAS: "FINISHED"
-                    2. Se o cliente explicitamente pediu para parar ou demonstrou irritação -> Responda APENAS: "FINISHED"
-                    3. Se o contexto pede retomada -> Responda com a mensagem de texto para enviar ao cliente.
+                    REGRAS DE OURO:
+                    1. JAMAIS peça desculpas pela demora. VOCÊ não demorou, você está seguindo um fluxo de retorno programado.
+                    2. NÃO diga "ainda estou aqui" ou "voltei". Aja como se estivesse apenas dando continuidade ao processo natural de follow-up.
+                    3. Se o cliente já resolveu o assunto ou disse "FINISHED", responda apenas "FINISHED".
+                    4. Se o contexto pede retomada, gere o texto da mensagem para enviar ao cliente.
+                    5. NÃO use placeholders como [Nome] ou Fulano. Se não souber o nome, não use nenhum.
+                    6. Seja breve, direto e natural.
                     """
 
                     try:
@@ -216,7 +241,9 @@ async def check_and_run_followups():
                             continue
 
                         resp = client.models.generate_content(
-                            model="gemini-2.5-flash", contents=analysis_prompt
+                            model="gemini-2.5-flash", 
+                            contents=analysis_prompt,
+                            config={"temperature": 0.1}
                         )
                         resp_ai = resp.text.strip()
 
@@ -281,9 +308,10 @@ async def check_and_run_followups():
                             # Mas se custom_url for passado, ele usa.
 
                             # Send Message
+                            clean_text = clean_message_content(resp_ai)
                             await send_whatsapp_message(
                                 chat_id,
-                                resp_ai,
+                                clean_text,
                                 api_key=custom_key,
                                 base_url=custom_url,
                             )

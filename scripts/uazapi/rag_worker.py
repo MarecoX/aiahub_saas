@@ -121,7 +121,12 @@ async def run_rag():
         return
     # -------------------------------
 
-    key = f"{chat_id}{BUFFER_KEY_SUFIX}"
+    # -------------------------------
+    
+    # 3b. Define Chave do Buffer (Namespaced)
+    # Deve bater com a lógica do ingest.py: f"{client_id}:{chat_id}{BUFFER_KEY_SUFIX}"
+    client_id_str = str(client_config["id"])
+    key = f"{client_id_str}:{chat_id}{BUFFER_KEY_SUFIX}"
 
     # Leitura + Limpeza Atômica
     async with redis_client.pipeline(transaction=True) as pipe:
@@ -131,8 +136,21 @@ async def run_rag():
 
     msgs = results[0]
 
+    # --- FALLBACK DE COMPATIBILIDADE ---
+    # Se não achou na chave nova, tenta na chave antiga (sem namespace) para não perder msg em voo
     if not msgs:
-        logger.info(f"Buffer vazio para {chat_id}. Worker duplicado?")
+         old_key = f"{chat_id}{BUFFER_KEY_SUFIX}"
+         async with redis_client.pipeline(transaction=True) as pipe:
+            pipe.lrange(old_key, 0, -1)
+            pipe.delete(old_key)
+            results = await pipe.execute()
+         msgs = results[0]
+         if msgs:
+             logger.warning(f"⚠️ Mensagens encontradas na chave legada (sem namespace): {chat_id}")
+    # -----------------------------------
+
+    if not msgs:
+        logger.info(f"Buffer vazio para {chat_id}. Worker duplicado ou chave incorreta?")
         await redis_client.aclose()
         Kestra.outputs(
             {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
@@ -141,6 +159,20 @@ async def run_rag():
 
     full_query = " ".join(msgs)
     logger.info(f"💬 Query do Usuário: {full_query}")
+    
+    # --- PERSISTÊNCIA DE HISTÓRICO (CRÍTICO PARA FOLLOW-UP) ---
+    try:
+        from saas_db import add_message
+        # Salva msg do User
+        add_message(
+            client_config["id"], 
+            chat_id, 
+            "user", 
+            full_query
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar histórico (User): {e}")
+    # ------------------------------------------------------------
 
     # --- AUTO-DETECT OPT-OUT TRIGGERS (Bypass AI) ---
     stop_cfg = t_cfg.get("desativar_ia", {}) if t_cfg else {}

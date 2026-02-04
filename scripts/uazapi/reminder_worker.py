@@ -31,7 +31,7 @@ if os.getenv("DATABASE_URL") and not os.getenv("DATABASE_CONNECTION_URI"):
     os.environ["DATABASE_CONNECTION_URI"] = os.getenv("DATABASE_URL")
 
 from kestra import Kestra
-from saas_db import get_connection, get_client_config_by_id, get_recent_messages
+from saas_db import get_connection, get_client_config_by_id, get_recent_messages, get_default_provider
 from uazapi_saas import send_whatsapp_message
 
 # Configura logs
@@ -73,20 +73,21 @@ async def analyze_context_and_generate_message(
 
     system_prompt = """Você é um assistente que analisa conversas de WhatsApp.
 Seu trabalho é:
-1. Analisar o contexto da conversa
-2. Decidir se faz sentido enviar um lembrete de follow-up
-3. Se SIM, gerar uma mensagem personalizada e natural
-4. Se NÃO, explicar o motivo
+1. Analisar o contexto da conversa.
+2. Decidir se faz sentido enviar um lembrete.
+3. Se SIM, gerar uma mensagem personalizada e natural.
+4. Se NÃO, explicar o motivo.
+
+IMPORTANTE: Se o lembrete foi solicitado explicitamente pelo usuário no histórico recente (ex: "me lembre às 08:30"), você DEVE ENVIAR. Não considere redundante só porque ele pediu recentemente. O lembrete é o cumprimento da promessa feita ao usuário.
 
 Responda EXATAMENTE no formato:
 DECISÃO: ENVIAR ou NÃO_ENVIAR
 MENSAGEM: [sua mensagem personalizada ou motivo para não enviar]
 
 Motivos para NÃO ENVIAR:
-- Cliente já fechou negócio/comprou
-- Cliente disse que não tem interesse
-- Cliente pediu para não ser contatado
-- Conversa indica que assunto já foi resolvido"""
+- Cliente já fechou negócio/comprou após o agendamento do lembrete.
+- Cliente disse explicitamente que não quer mais o lembrete ou não tem interesse.
+- Conversa indica que o assunto do lembrete já foi resolvido COMPLETAMENTE."""
 
     user_prompt = f"""Contexto do lembrete: {reminder_message}
 
@@ -102,7 +103,7 @@ Analise e decida se devo enviar o lembrete e gere uma mensagem apropriada."""
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.7,
+            temperature=0.2,
             max_tokens=300,
         )
 
@@ -130,6 +131,27 @@ Analise e decida se devo enviar o lembrete e gere uma mensagem apropriada."""
         logger.error(f"Erro ao analisar contexto: {e}")
         # Fallback: envia mensagem padrão
         return True, f"Olá! Estou retornando conforme combinamos. {reminder_message}"
+
+
+def clean_message_content(text: str) -> str:
+    """Limpa placeholders comuns gerados por alucinação da IA."""
+    import re
+    # Remove variações de [Nome do Cliente], [Seu Nome], Fulano, etc.
+    patterns = [
+        r"\[Nome do Cliente\]",
+        r"\[Nome do Usuário\]",
+        r"\[Insira o Nome\]",
+        r"\[Nome\]",
+        r"Fulano(,? ?\?|!)?",  # Remove "Fulano?", "Fulano!" etc.
+    ]
+    cleaned = text
+    for p in patterns:
+        cleaned = re.sub(p, "", cleaned, flags=re.IGNORECASE)
+    
+    # Remove espaços duplos e pontuações órfãs resultantes da remoção
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"^\s*[,.?!\s]+", "", cleaned) # Remove pontuação no início
+    return cleaned.strip()
 
 
 async def process_pending_reminders():
@@ -178,6 +200,28 @@ async def process_pending_reminders():
                     cancelled += 1
                     continue
 
+                # --- KILL SWITCH (ZOMBIE PREVENTION) ---
+                # Verifica se o Follow-up/IA está ativo antes de enviar
+                followup_cfg = client_config.get("followup_config") or {}
+                tools_cfg = client_config.get("tools_config") or {}
+                
+                # Regra 1: Follow-up Config Active
+                is_followup_active = followup_cfg.get("active") in [True, "true", "True", 1]
+                
+                # Regra 2: AI Active (Global)
+                is_ai_active = tools_cfg.get("ai_active", True)
+
+                # Se ambos estiverem desligados (ou se a lógica exigir UM deles), bloqueamos.
+                # Assumindo que reminders são parte do ecossistema de follow-up/IA:
+                if not is_followup_active and not is_ai_active:
+                     logger.warning(f"🛑 Lembrete {reminder_id} BLOQUEADO: Follow-up/IA Desativados para cliente {client_id}")
+                     await update_reminder_status(
+                        reminder_id, "cancelled", "Bloqueio de Segurança: IA/Follow-up OFF"
+                     )
+                     cancelled += 1
+                     continue
+                # ---------------------------------------
+
                 # Analisa contexto e gera mensagem
                 (
                     should_send,
@@ -188,14 +232,37 @@ async def process_pending_reminders():
 
                 if should_send:
                     # Envia mensagem
+                    # 1. Tenta pegar das colunas diretas (Tabela clients)
                     api_url = client_config.get("api_url")
                     api_token = client_config.get("token")
 
+                    # 2. Fallback para client_providers (Novo esquema Multi-Provider)
+                    if not api_url or not api_token:
+                        logger.info(f"🔍 Buscando credenciais em client_providers para {client_id}...")
+                        p_type, p_config = get_default_provider(str(client_id))
+                        if p_type == "uazapi":
+                            api_url = p_config.get("url")
+                            # Tenta 'token' ou 'key' (compatibilidade)
+                            api_token = p_config.get("token") or p_config.get("key")
+
+                    # 3. Fallback para tools_config (Legacy/Config manual)
+                    if not api_url or not api_token:
+                        logger.info(f"🔍 Buscando credenciais em tools_config para {client_id}...")
+                        tools_cfg = client_config.get("tools_config") or {}
+                        whatsapp_cfg = tools_cfg.get("whatsapp") or {}
+                        api_url = api_url or whatsapp_cfg.get("url")
+                        api_token = api_token or whatsapp_cfg.get("key")
+
+                    if not api_url or not api_token:
+                        logger.error(f"❌ Credenciais ausentes para cliente {client_id}.")
+                        raise ValueError("Uazapi Credentials Missing - Configure as integrações do cliente")
+
+                    clean_text = clean_message_content(result_message)
                     await send_whatsapp_message(
-                        chat_id, result_message, api_key=api_token, base_url=api_url
+                        chat_id, clean_text, api_key=api_token, base_url=api_url
                     )
 
-                    await update_reminder_status(reminder_id, "sent", result_message)
+                    await update_reminder_status(reminder_id, "sent", clean_text)
                     logger.info(f"✅ Lembrete {reminder_id} enviado para {chat_id}")
                     sent += 1
                 else:
@@ -230,10 +297,10 @@ async def update_reminder_status(reminder_id, status: str, notes: str = None):
                 cur.execute(
                     """
                     UPDATE reminders 
-                    SET status = %s, updated_at = NOW(), notes = %s
+                    SET status = %s
                     WHERE id = %s
                 """,
-                    (status, notes, reminder_id),
+                    (status, reminder_id),
                 )
     except Exception as e:
         logger.error(f"Erro ao atualizar status do lembrete {reminder_id}: {e}")

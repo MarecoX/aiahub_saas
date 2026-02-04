@@ -76,6 +76,83 @@ async def send_whatsapp_audio(
         raise RuntimeError(f"Erro ao enviar áudio: {exc}") from exc
 
 
+async def send_whatsapp_media(
+    number: str,
+    media_url: str,
+    media_type: str = "image",
+    caption: str = "",
+    doc_name: str = None,
+    api_key: str = None,
+    base_url: str = None,
+) -> dict:
+    """
+    Envia mídia genérica (imagem, vídeo, documento) via WhatsApp.
+    API Specs:
+      - file: URL or base64 (required)
+      - text: Caption (optional)
+      - docName: Filename for docs (optional)
+      - type: image, video, document
+    """
+    url = base_url or DEFAULT_UAZAPI_URL
+    token = api_key or DEFAULT_UAZAPI_KEY
+
+    if not url or not token:
+        logger.error("❌ ERRO: URL ou Token do Uazapi não definidos!")
+        raise ValueError("Uazapi Credentials Missing")
+
+    # Mapeia tipos
+    valid_types = [
+        "image",
+        "video",
+        "document",
+        "audio",
+        "myaudio",
+        "ptt",
+        "ptv",
+        "sticker",
+    ]
+    if media_type not in valid_types:
+        if "pdf" in media_url or "doc" in media_url or "xls" in media_url:
+            media_type = "document"
+        else:
+            media_type = "image"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Payload minimalista conforme documentação
+            payload = {"number": number, "type": media_type, "file": media_url}
+
+            if caption:
+                payload["text"] = caption
+
+            # Adiciona docName APENAS se for documento
+            if media_type == "document":
+                payload["docName"] = doc_name or "documento.pdf"
+
+            endpoint = f"{url}/send/media"
+
+            resp = await client.post(
+                endpoint,
+                json=payload,
+                headers={"token": f"{token}"},
+                timeout=60.0,
+            )
+
+            if resp.status_code >= 400:
+                logger.error(f"❌ Erro API Uazapi: {resp.status_code} - {resp.text}")
+
+            resp.raise_for_status()
+            logger.info(f"🖼️ [SaaS] Mídia ({media_type}) enviada para {number}")
+            return resp.json()
+
+    except httpx.HTTPError as exc:
+        logger.error(f"❌ Erro HTTP Uazapi (Media): {exc}")
+        raise RuntimeError(f"Erro ao enviar mídia: {exc}") from exc
+    except Exception as exc:
+        logger.error(f"❌ Erro Genérico Uazapi (Media): {exc}")
+        raise RuntimeError(f"Erro ao enviar mídia: {exc}") from exc
+
+
 async def connect_instance(
     phone: str = None, api_key: str = None, base_url: str = None
 ) -> dict:

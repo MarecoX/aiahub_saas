@@ -313,21 +313,13 @@ async def handle_message(
     message_data: dict,
     api_url: str = None,
     api_key: str = None,
-    client_id: str = None,  # ← NOVO
-    chat_id: str = None,  # ← NOVO
+    client_id: str = None,
+    chat_id: str = None,
+    user_name: str = None,  # <--- NOVO
 ) -> MessageInfo:
     """
     Processa uma mensagem e retorna informações estruturadas.
-
-    Args:
-        message_data: Dicionário com dados da mensagem do webhook
-        api_url: URL da API Uazapi (opcional, para download de mídia)
-        api_key: Token da API Uazapi (opcional, para download de mídia)
-        client_id: ID do cliente para tracking (opcional)
-        chat_id: ID do chat para tracking (opcional)
-
-    Returns:
-        MessageInfo com texto, tipo, caminho da mídia e se deve processar
+    Now accepts user_name to inject into context.
     """
     try:
         content = message_data.get("content")
@@ -346,6 +338,14 @@ async def handle_message(
 
         # Verifica se deve processar
         should_process = _should_process_message(msg_type) and bool(text.strip())
+
+        # --- Context Injection: User Name ---
+        if user_name and should_process:
+            # Sanitiza nome básico (remove chars estranhos se necessário, mas simples é melhor)
+            # Injeta no formato que o System Prompt entenda como contexto
+            text = f"[Nome do Usuário: {user_name}] {text}"
+            logger.info(f"👤 Nome do usuário injetado no contexto: {user_name}")
+        # ------------------------------------
 
         # --- NOVO: Extração de Mensagem Citada (Reply) ---
         quoted_text = ""

@@ -101,10 +101,32 @@ def get_client_config(token: str):
                     logger.info(
                         f"✅ Cliente identificado: {result['name']} (ID: {result['id']})"
                     )
-                    return result  # Já é dict devido ao row_factory
-                else:
-                    logger.warning(f"⚠️ Nenhum cliente encontrado para o token: {token}")
-                    return None
+                    return result
+
+                # --- FALLBACK MIGRATION (Search by Provider Token or Uazapi Key) ---
+                # Se não achou pelo token direto da tabela clients, tenta achar quem usa esse token como CREDENCIAL (Provider)
+                sql_provider = """
+                    SELECT c.id, c.name, c.system_prompt, c.gemini_store_id, c.tools_config, c.human_attendant_timeout, 
+                           c.api_url, c.token, c.lancepilot_token, c.lancepilot_workspace_id, c.lancepilot_number, 
+                           c.lancepilot_active, c.followup_config, c.whatsapp_provider
+                    FROM clients c
+                    LEFT JOIN client_providers cp ON c.id = cp.client_id
+                    WHERE cp.config->>'token' = %s 
+                       OR c.tools_config->'whatsapp'->>'key' = %s
+                       OR c.tools_config->'whatsapp_official'->>'token' = %s
+                    LIMIT 1
+                """
+                cur.execute(sql_provider, (token, token, token))
+                result_provider = cur.fetchone()
+
+                if result_provider:
+                    logger.info(
+                        f"🔄 Migração: Cliente identificado via Token do Provider/Uazapi: {result_provider['name']}"
+                    )
+                    return result_provider
+
+                logger.warning(f"⚠️ Nenhum cliente encontrado para o token: {token}")
+                return None
 
     except Exception as e:
         logger.error(f"❌ Erro de Banco de Dados: {e}")
