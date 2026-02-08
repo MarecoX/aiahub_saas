@@ -22,7 +22,7 @@ tasks:
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: ALWAYS
-    containerImage: marsllator/my-kestra-worker:latest
+    containerImage: marsllator/kestra-api-manager:latest
 
     namespaceFiles:
       enabled: true
@@ -55,8 +55,8 @@ tasks:
     type: io.kestra.plugin.scripts.python.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: NEVER
-    containerImage: marsllator/my-kestra-worker:latest
+      pullPolicy: ALWAYS
+    containerImage: marsllator/kestra-api-manager:latest
 
     namespaceFiles:
       enabled: true
@@ -87,7 +87,7 @@ tasks:
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: ALWAYS
-    containerImage: marsllator/my-kestra-worker:latest
+    containerImage: marsllator/kestra-api-manager:latest
 
     namespaceFiles:
       enabled: true

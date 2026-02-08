@@ -94,7 +94,7 @@ def render_monitoring_tab(user_data):
                         ),
                         "followup_stage": "Estágio",
                     },
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info("Nenhuma conversa ativa no momento.")

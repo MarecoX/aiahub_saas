@@ -24,6 +24,23 @@ def render_tools_tab(user_data):
     if not t_config:
         t_config = {}
 
+    # --- Base de Conhecimento (RAG) ---
+    st.subheader("📚 Base de Conhecimento (RAG)")
+    rag_active_val = t_config.get("rag_active", True)  # Default True
+
+    c_rag_active = st.toggle(
+        "Ativar Base de Conhecimento",
+        value=rag_active_val,
+        help="Se ativado, a IA consultará seus documentos (manuais, PDFs) antes de responder. Se desativado, usará apenas ferramentas e conhecimento geral.",
+    )
+
+    if c_rag_active:
+        st.info("🟢 RAG Ativado: A IA tem acesso aos seus documentos empresariais.")
+    else:
+        st.warning("🔴 RAG Desativado: A IA NÃO consultará seus documentos.")
+
+    st.divider()
+
     # --- Kommo CRM ---
     st.subheader("Kommo CRM")
     kommo_cfg = t_config.get("qualificado_kommo_provedor", {})
@@ -247,8 +264,8 @@ def render_tools_tab(user_data):
             "Template da Mensagem (Opcional)",
             value=r_template,
             height=80,
-            placeholder="Ex: *Novo Pedido* \\n Cliente: {{nome}} \\n Produto: {{produto}}",
-            help="Use {{campo}} para inserir dados. Se vazio, usa formato padrão.",
+            placeholder="Ex: *Novo Pedido* \\n Telefone: {{telefone}} \\n Resumo: {{resumo_da_solicitacao}}",
+            help="Use {{campo}} para inserir dados. **{{telefone}}** ou **{{numero_do_cliente}}** é preenchido automaticamente com o número do WhatsApp. Mínimo: 2 campos.",
         )
 
     st.divider()
@@ -423,8 +440,127 @@ def render_tools_tab(user_data):
         cal_event_id = ""
 
     st.divider()
+
+    # --- WhatsApp Reactions ---
+    st.subheader("👍 Reações do WhatsApp")
+    react_cfg = t_config.get("whatsapp_reactions", {})
+    if isinstance(react_cfg, bool):
+        react_cfg = {"active": react_cfg}
+
+    c_react_active = st.toggle(
+        "Ativar Reações (Emojis)",
+        value=react_cfg.get("active", False),
+        help="Permite que a IA reaja às mensagens do cliente com emojis (👍, ❤️, 😂).",
+    )
+
+    react_instructions = react_cfg.get("instructions", "")
+
+    if c_react_active:
+        react_instructions = st.text_area(
+            "Quando reagir?",
+            value=react_instructions,
+            height=80,
+            placeholder="Ex: Reaja com 👀 em toda mensagem nova. Use 👍 quando cliente confirmar algo.",
+            help="Instrua a IA sobre quando e qual emoji usar. Essas instruções serão adicionadas ao prompt.",
+        )
+
+    st.divider()
+
+    st.divider()
+
+    # --- SGP (Integração ISP) ---
+    st.subheader("🌐 SGP - Integração ISP")
+    sgp_cfg = t_config.get("sgp_tools", {})
+    if isinstance(sgp_cfg, bool):
+        sgp_cfg = {"active": sgp_cfg}
+
+    c_sgp_active = st.toggle(
+        "Ativar Integração SGP",
+        value=sgp_cfg.get("active", False),
+        help="Permite consultar viabilidade e realizar pré-cadastro no sistema SGP.",
+    )
+
+    sgp_url = sgp_cfg.get("sgp_url", "")
+    sgp_token = sgp_cfg.get("sgp_token", "")
+    sgp_app = sgp_cfg.get("sgp_app", "")
+
+    if c_sgp_active:
+        sgp_url = st.text_input(
+            "URL do SGP",
+            value=sgp_url,
+            placeholder="https://sgp.net.br",
+        )
+        sgp_app = st.text_input(
+            "SGP App Name",
+            value=sgp_app,
+            placeholder="Ex: meu_app_integracao",
+        )
+        sgp_token = st.text_input(
+            "Token de Acesso",
+            value=sgp_token,
+            type="password",
+        )
+        st.caption("A IA poderá: Consultar Viabilidade e Realizar Pré-Cadastro.")
+
+    st.divider()
+
+    # --- DEBUG / TESTES MANUAIS ---
+    with st.expander("🔧 Ferramentas de Debug / Teste Manual", expanded=False):
+        st.write("**Teste de Reação (Uazapi)**")
+        t_chat_id = st.text_input(
+            "Chat ID / Remote JID", placeholder="5511999999999@s.whatsapp.net"
+        )
+        t_msg_id = st.text_input("Message ID", placeholder="3EB0...")
+        t_emoji = st.text_input("Emoji", placeholder="👍")
+
+        if st.button("Enviar Reação Manual"):
+            if not t_chat_id or not t_msg_id:
+                st.error("Preencha Chat ID e Message ID.")
+            else:
+                try:
+                    import asyncio
+
+                    # Import dinâmico para garantir path
+                    try:
+                        from scripts.uazapi.uazapi_saas import send_whatsapp_reaction
+                    except ImportError:
+                        sys.path.append(os.path.join(root_dir, "scripts", "uazapi"))
+                        from uazapi_saas import send_whatsapp_reaction
+
+                    # Tenta pegar token do cliente atual
+                    api_key = None
+                    api_url = None
+
+                    prov = get_provider_config(str(user_data["id"]), "uazapi")
+                    if prov:
+                        api_key = prov.get("token") or prov.get("key")
+                        api_url = prov.get("url")
+
+                    if not api_key:
+                        api_key = user_data.get("token")
+                        api_url = user_data.get("api_url")
+
+                    st.info(f"Usando URL: {api_url} | Token: ...{str(api_key)[-4:]}")
+
+                    res = asyncio.run(
+                        send_whatsapp_reaction(
+                            number=t_chat_id,
+                            message_id=t_msg_id,
+                            emoji=t_emoji,
+                            api_key=api_key,
+                            base_url=api_url,
+                        )
+                    )
+                    st.success(f"Resultado: {res}")
+
+                except Exception as e:
+                    st.error(f"Erro ao enviar: {e}")
+
     if st.button("💾 Salvar Integrações"):
         new_tools_config = t_config.copy()
+
+        # Save RAG Config
+        new_tools_config["rag_active"] = c_rag_active
         # Save Kommo
         new_tools_config["qualificado_kommo_provedor"] = {
             "active": c_kommo_active,
@@ -481,6 +617,20 @@ def render_tools_tab(user_data):
             "active": c_cal_active,
             "api_key": cal_api_key if c_cal_active else "",
             "event_type_id": cal_event_id if c_cal_active else "",
+        }
+
+        # Save WhatsApp Reactions
+        new_tools_config["whatsapp_reactions"] = {
+            "active": c_react_active,
+            "instructions": react_instructions if c_react_active else "",
+        }
+
+        # Save SGP Interface
+        new_tools_config["sgp_tools"] = {
+            "active": c_sgp_active,
+            "sgp_url": sgp_url if c_sgp_active else "",
+            "sgp_token": sgp_token if c_sgp_active else "",
+            "sgp_app": sgp_app if c_sgp_active else "",
         }
 
         try:

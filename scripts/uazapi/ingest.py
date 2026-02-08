@@ -201,8 +201,12 @@ async def run_ingest(webhook_data):
             try:
                 from saas_db import clear_chat_history
 
-                clear_chat_history(chat_id)
-                logger.info(f"✅ Histórico limpo para {chat_id}")
+                # Thread ID composto (igual ao chains_saas.py)
+                client_id_str = str(client_config.get("id", "unknown")) if client_config else "unknown"
+                thread_id = f"{client_id_str}:{chat_id}"
+                
+                clear_chat_history(thread_id)
+                logger.info(f"✅ Histórico limpo para {thread_id}")
             except Exception as e:
                 logger.error(f"Erro ao limpar histórico: {e}")
             Kestra.outputs(
@@ -213,6 +217,7 @@ async def run_ingest(webhook_data):
                 }
             )
             return
+
 
         if message_lower == "#ativar":
             # Remove pausa de atendimento humano
@@ -259,7 +264,7 @@ async def run_ingest(webhook_data):
             return
         # --- COMANDOS ESPECIAIS (FIM) ---
 
-        # 4. Salva no Redis (Buffer) - AGORA NAMESPACED POR CLIENTE
+        # 4. Salva no Redis (Buffer) - AGORA JSON PAYLOAD (COM ID)
         
         # Resolve client_id para segregar buffer
         client_id_str = "unknown"
@@ -271,10 +276,27 @@ async def run_ingest(webhook_data):
 
         redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-        await redis_client.rpush(buffer_key, text_content)
+        # Payload rico para o RAG (ID necessário para Reações)
+        # Payload rico para o RAG (ID necessário para Reações)
+        # Tenta pegar ID da mensagem (Prioriza 'messageid' limpo, depois key.id, depois id)
+        # Force str() to avoid JSON serialization errors with unexpected types
+        msg_id = str(
+            message_data.get("messageid") 
+            or message_data.get("key", {}).get("id") 
+            or message_data.get("id") 
+            or "unknown"
+        )
+        
+        payload = {
+            "text": text_content,
+            "id": msg_id,
+            "timestamp": message_data.get("messageTimestamp")
+        }
+        
+        await redis_client.rpush(buffer_key, json.dumps(payload))
         await redis_client.expire(buffer_key, int(BUFFER_TTL))
 
-        logger.info(f"✅ Mensagem salva no buffer Redis: {text_content[:50]}...")
+        logger.info(f"✅ Mensagem salva no buffer Redis (JSON): {text_content[:50]}... ID: {msg_id}")
 
         # --- TRACKING UPDATE (Follow-up System) ---
         try:

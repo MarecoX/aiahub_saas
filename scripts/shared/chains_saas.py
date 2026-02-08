@@ -237,31 +237,31 @@ def create_knowledge_base_tool(store_id: str):
     return StructuredTool.from_function(
         func=search_func,
         name="consultar_documentos_empresa",
-        description="Use esta ferramenta para buscar informações nos manuais, PDFs e arquivos da empresa. O Gemini pesquisará internamente e retornará a resposta baseada nos documentos em português",
+        description="Use esta ferramenta APENAS para dúvidas sobre planos, regras e manuais. PROIBIDO usar para verificar cobertura ou viabilidade técnica de CEP. Para CEP, use sempre 'consultar_viabilidade'.",
     )
 
 
 # --- FACTORY ---
 
 
-def create_saas_agent(system_prompt: str, tools_list: list, store_id: str = None):
+def create_saas_agent(system_prompt: str, tools_list: list):
     """
     Cria um Agente OpenAI usando create_agent e PostgresSaver.
-    Injeta dinamicamente o tool de Knowledge Base se store_id for válido.
     """
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, api_key=OPENAI_API_KEY)
 
+    # 🛑 INJECTION: FORÇA EXECUÇÃO SEQUENCIAL (Prevents "Crazy Mode")
+    if system_prompt:
+        system_prompt += (
+            "\n\n🚨 **SYSTEM RULE: SEQUENTIAL EXECUTION ONLY** 🚨\n"
+            "You are FORBIDDEN from calling multiple tools at once.\n"
+            "1. Call ONE tool.\n"
+            "2. Wait for the result.\n"
+            "3. Then proceed.\n"
+            "NEVER parallelize. ONE BY ONE."
+        )
+
     final_tools = list(tools_list) if tools_list else []
-
-    # Injeta Knowledge Base do Cliente (Enterprise usa nomes resource, ex: projects/... ou stores/...)
-    # Nosso store_id local pode ser o 'name' completo ou apenas o ID.
-    # O Gemini Manager v2 tenta usar o name completo.
-    # Assume-se que store_id venha correto do DB (atualizado pelo Manager).
-
-    if store_id:
-        kb_tool = create_knowledge_base_tool(store_id)
-        final_tools.append(kb_tool)
-        logger.info(f"📎 Tool Enterprise Docs injetada: {store_id}")
 
     # --- CONTEXT TRIMMING (LangChain 1.0 Strict) ---
 
@@ -328,8 +328,6 @@ async def ask_saas(
         user_message = ("user", query)
 
     tools = tools_list or []
-    store_id = client_config.get("gemini_store_id")
-
     # Reseta acumulador de Gemini usage
     global _gemini_usage_accumulator
     _gemini_usage_accumulator = {"input_tokens": 0, "output_tokens": 0}
@@ -338,15 +336,15 @@ async def ask_saas(
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            # 1. Cria o Agente (Passando Store ID)
-            agent_runnable = create_saas_agent(system_prompt, tools, store_id=store_id)
+            # 1. Cria o Agente (Tools já injetadas dinamicamente via tools_library)
+            agent_runnable = create_saas_agent(system_prompt, tools)
 
             # 2. Config de Execução (thread_id inclui client_id para isolar contextos)
             client_id = str(client_config.get("id", "unknown"))
             thread_id = (
                 f"{client_id}:{chat_id}"  # Cada cliente SaaS tem histórico separado
             )
-            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 15}
+            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 25}
 
             # 3. Executa com Proteção
             try:
@@ -368,6 +366,7 @@ async def ask_saas(
                     return (
                         "⚠️ [Auto-Correção] Detectei um erro na minha memória recente. Reiniciei nosso contexto. Por favor, faça sua pergunta novamente.",
                         {"openai": None, "gemini": None},
+                        [],
                     )
                 raise e
 
@@ -406,12 +405,17 @@ async def ask_saas(
                 return (
                     "Desculpe, tive um problema de conexão. Por favor, tente novamente.",
                     {"openai": None, "gemini": None},
+                    [],
                 )
 
         except Exception as e:
             logger.error(f"Erro no Agent SaaS: {e}", exc_info=True)
-            # Retorna o erro real para debug na interface
-            return f"❌ Erro interno no Agente: {str(e)}", {
-                "openai": None,
-                "gemini": None,
-            }
+            # NUNCA expor erro técnico ao cliente! Mensagem genérica amigável
+            return (
+                "Desculpe, estou com dificuldades técnicas no momento. Por favor, tente novamente em alguns instantes. 🙏",
+                {
+                    "openai": None,
+                    "gemini": None,
+                },
+                [],
+            )

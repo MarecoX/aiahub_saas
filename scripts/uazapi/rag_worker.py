@@ -122,7 +122,7 @@ async def run_rag():
     # -------------------------------
 
     # -------------------------------
-    
+
     # 3b. Define Chave do Buffer (Namespaced)
     # Deve bater com a lógica do ingest.py: f"{client_id}:{chat_id}{BUFFER_KEY_SUFIX}"
     client_id_str = str(client_config["id"])
@@ -139,37 +139,101 @@ async def run_rag():
     # --- FALLBACK DE COMPATIBILIDADE ---
     # Se não achou na chave nova, tenta na chave antiga (sem namespace) para não perder msg em voo
     if not msgs:
-         old_key = f"{chat_id}{BUFFER_KEY_SUFIX}"
-         async with redis_client.pipeline(transaction=True) as pipe:
+        old_key = f"{chat_id}{BUFFER_KEY_SUFIX}"
+        async with redis_client.pipeline(transaction=True) as pipe:
             pipe.lrange(old_key, 0, -1)
             pipe.delete(old_key)
             results = await pipe.execute()
-         msgs = results[0]
-         if msgs:
-             logger.warning(f"⚠️ Mensagens encontradas na chave legada (sem namespace): {chat_id}")
+        msgs = results[0]
+        if msgs:
+            logger.warning(
+                f"⚠️ Mensagens encontradas na chave legada (sem namespace): {chat_id}"
+            )
     # -----------------------------------
 
     if not msgs:
-        logger.info(f"Buffer vazio para {chat_id}. Worker duplicado ou chave incorreta?")
+        logger.info(
+            f"Buffer vazio para {chat_id}. Worker duplicado ou chave incorreta?"
+        )
         await redis_client.aclose()
         Kestra.outputs(
             {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
         )
         return
 
-    full_query = " ".join(msgs)
-    logger.info(f"💬 Query do Usuário: {full_query}")
-    
+    # Parse JSON Messages (Protocolo v2: {"text": "...", "id": "..."})
+    import json
+
+    final_texts = []
+    last_msg_id = None
+
+    for m in msgs:
+        try:
+            # Tenta decodificar JSON
+            data = json.loads(m)
+            if isinstance(data, dict):
+                text = data.get("text", "")
+                if text:
+                    final_texts.append(text)
+
+                # Atualiza último ID visto
+                if data.get("id"):
+                    last_msg_id = data.get("id")
+            else:
+                # Fallback se for string pura (legado)
+                final_texts.append(str(m))
+
+        except json.JSONDecodeError:
+            # string pura
+            final_texts.append(str(m))
+
+    full_query = " ".join(final_texts)
+    logger.info(f"💬 Query do Usuário: {full_query} (Last ID: {last_msg_id})")
+
+    # Injeta ID no System Prompt para uso de ferramentas
+    # MOVIDO PARA O FINAL DO PROMPT para dar maior peso (Recency Bias)
+    reaction_instruction = ""
+    if last_msg_id:
+        # Busca instruções de reação do cliente
+        tools_cfg = client_config.get("tools_config", {})
+        react_cfg = tools_cfg.get("whatsapp_reactions", {})
+        react_instructions = react_cfg.get("instructions", "")
+
+        reaction_instruction = f"""
+\n🚨 **INSTRUÇÃO CRÍTICA DE INTERFACE (REAÇÕES)** 🚨
+O ID da mensagem do usuário é: '{last_msg_id}'
+"""
+        # Se cliente configurou instruções de quando reagir
+        if react_instructions:
+            reaction_instruction += f"""
+📋 **REGRAS DE REAÇÃO DO CLIENTE**:
+{react_instructions}
+"""
+
+        reaction_instruction += f"""
+COMO REAGIR:
+1. ✅ **OBRIGATÓRIO**: Use a ferramenta `reagir_mensagem(emoji='EMOJI_AQUI', message_id='{last_msg_id}')`.
+2. 🚫 **PROIBIDO**: NÃO coloque o emoji no texto da sua resposta.
+   - ERRADO: "👀 Olá, tudo bem?"
+   - CORRETO: (Chama Tool) + "Olá, tudo bem?"
+"""
+        # Adiciona ao final do prompt existente
+        system_prompt += reaction_instruction
+
+        # INSTRUÇÃO DE PRIORIDADE DE FERRAMENTAS
+        system_prompt += f"""
+\n⚡ **PRIORIDADE DE EXECUÇÃO** ⚡
+O parâmetro 'chat_id' é: '{chat_id}'
+Se o usuário pedir uma ação (ex: "Reaja", "Agende"), IGNORE o RAG.
+EXECUTE a ferramenta com os dados fornecidos: `reagir_mensagem(emoji='...', message_id='{last_msg_id}', chat_id='{chat_id}')`.
+"""
+
     # --- PERSISTÊNCIA DE HISTÓRICO (CRÍTICO PARA FOLLOW-UP) ---
     try:
         from saas_db import add_message
+
         # Salva msg do User
-        add_message(
-            client_config["id"], 
-            chat_id, 
-            "user", 
-            full_query
-        )
+        add_message(client_config["id"], chat_id, "user", full_query)
     except Exception as e:
         logger.error(f"❌ Erro ao salvar histórico (User): {e}")
     # ------------------------------------------------------------
@@ -244,10 +308,15 @@ async def run_rag():
             client_config.get("tools_config"),
             chat_id=chat_id,
             client_config=client_config,
+            last_msg_id=last_msg_id,
         )
 
+        # DEBUG PROMPT INJECTION
+        logger.info(f"🧠 SYSTEM PROMPT (Last 600 chars): ...{system_prompt[-600:]}")
+
         # Chama o Cérebro (OpenAI) passando as Tools (Gemini/Maps)
-        response_text, usage_data = await ask_saas(
+        # ask_saas retorna (text, usage, messages)
+        response_text, usage_data, history_messages = await ask_saas(
             query=full_query,
             chat_id=chat_id,
             system_prompt=system_prompt,
@@ -256,6 +325,38 @@ async def run_rag():
         )
 
         logger.info(f"🤖 Resposta Agente SaaS: {response_text[:50]}...")
+
+        # === DEBUG AVANÇADO DE FERRAMENTAS ===
+        logger.info(
+            f"🔍 [DEBUG FERRAMENTAS] Analisando histórico de execução ({len(history_messages)} msgs)..."
+        )
+        found_tool_calls = False
+        for msg in history_messages:
+            # Verifica se a mensagem tem 'tool_calls' (OpenAI)
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                found_tool_calls = True
+                for tc in msg.tool_calls:
+                    logger.info(
+                        f"🛠️ [TOOL DECISION] O Agente DECIDIU chamar: {tc.get('name')} | Arms: {tc.get('args')}"
+                    )
+
+            # Verifica mensagens de 'tool' (Output da ferramenta)
+            if msg.type == "tool":
+                logger.info(
+                    f"📉 [TOOL OUTPUT] Retorno da ferramenta {msg.name}: {msg.content[:200]}..."
+                )
+
+        if not found_tool_calls:
+            logger.info(
+                "🚫 [DEBUG FERRAMENTAS] O Agente NÃO tentou chamar nenhuma ferramenta nesta execução."
+            )
+            logger.info(
+                f"👀 Contexto de Reação: LastMsgID={last_msg_id} | ChatID={chat_id}"
+            )
+            logger.info(
+                "💡 Dica: Verifique se o prompt realmente exige 'obrigatório' ou se a IA achou desnecessário."
+            )
+        # =====================================
 
         # Salva usage para tracking de custos
         try:

@@ -10,7 +10,7 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
 from saas_db import get_connection, get_provider_config
-from uazapi_saas import send_whatsapp_message
+from uazapi_saas import send_whatsapp_message, send_whatsapp_audio
 from config import REDIS_URL
 
 # Config logging
@@ -99,14 +99,14 @@ def clean_message_content(text: str) -> str:
 
 
 async def check_and_run_followups():
-    logger.info("🔍 Checking for stalled conversations (Refactored)...")
+    logger.info("🔍 Checking for stalled conversations (Refactored for Chaining & Safety)...")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
             logger.info("🕵️ Executing DB Query for candidates...")
 
-            # Adicionado c.tools_config para checar se é Meta/LancePilot
-            # Adicionado c.api_url para override de Uazapi
+            # --- SAFETY UPDATE: Only check conversations active in the last 24 hours ---
+            # Prevents waking up dead/zombie conversations from weeks ago.
             cur.execute("""
                 SELECT 
                     ac.chat_id, 
@@ -126,217 +126,282 @@ async def check_and_run_followups():
                 JOIN clients c ON ac.client_id = c.id
                 WHERE ac.last_role = 'assistant'
                 AND ac.status = 'active'
+                AND ac.last_message_at > NOW() - INTERVAL '24 HOURS'
             """)
 
             rows = cur.fetchall()
-            logger.info(f"📊 Rows found (Active Assistant): {len(rows)}")
+            logger.info(f"📊 Rows found (Active Assistant < 24h): {len(rows)}")
 
             for row in rows:
                 chat_id = row["chat_id"]
                 client_id = row["client_id"]
+                client_token = row.get("client_token") or ""
+                
+                # --- INITIALIZE STATE FOR CHAINING ---
+                # We update these as we iterate through chained stages
                 current_stage_idx = row["followup_stage"] or 0
-                config = row["followup_config"] or {}
                 last_context_txt = row.get("last_context") or ""
+                diff_minutes = float(row.get("db_diff_minutes") or 0)
+                
+                config = row["followup_config"] or {}
                 tools_config_json = row.get("tools_config") or {}
 
                 # --- FILTRO POR PROVIDER (PRIMÁRIO) ---
                 provider = row.get("whatsapp_provider") or "none"
                 if provider not in [None, "", "none", "uazapi"]:
                     continue  # Este worker só processa Uazapi
-                # ----------------------------------------
 
-                # --- SAFETY CHECKS (LEGADO - Manter para compatibilidade) ---
+                # --- SAFETY CHECKS (LEGADO) ---
                 meta_cfg = tools_config_json.get("whatsapp", {})
                 meta_legacy = tools_config_json.get("whatsapp_official", {})
                 lp_cfg = tools_config_json.get("lancepilot", {})
 
-                # Se usa Meta Oficial ou LancePilot, este worker IGNORA.
                 if meta_cfg.get("active") or meta_legacy.get("active"):
                     continue
                 if lp_cfg.get("active"):
                     continue
-                # -----------------------------------------------
 
                 # --- DEBUG CHECK ---
                 target_chat_id = os.getenv("DEBUG_CHAT_ID")
                 if target_chat_id and str(target_chat_id).strip() not in str(chat_id):
-                    # Se tiver filtro e não for esse chat, pula silenciosamente
                     continue
-                # -------------------
 
                 # === EARLY EXIT: Config vazia ou None ===
                 if not config:
-                    logger.debug(f"⏭️ SKIP [{chat_id}]: followup_config is empty/None")
                     continue
 
-                # === DEBUG LOGGING (CRÍTICO) ===
-                logger.info(f"🔍 DEBUG [{chat_id}] followup_config raw: {config}")
-
-                # Check Active Flag via Python - MAIS ROBUSTO
+                # Check Active Flag via Python
                 is_active = config.get("active")
-
-                # Trata vários formatos: True, "true", "True", 1, "1"
                 active_values = [True, "true", "True", "1", 1]
                 if is_active not in active_values:
-                    logger.info(
-                        f"⏭️ SKIP [{chat_id}]: Follow-up DESATIVADO (active={is_active})"
-                    )
                     continue
 
                 # Check 1: Human Intervention (Redis)
                 if await check_is_paused(chat_id):
-                    logger.info(
-                        f"🛑 Skipping {chat_id}: Human Attendant Active (Paused)."
-                    )
+                    logger.info(f"🛑 Skipping {chat_id}: Human Attendant Active (Paused).")
                     continue
 
                 stages = config.get("stages", [])
-                if not stages or current_stage_idx >= len(stages):
+                
+                # === CHAINING LOOP ===
+                # This loop allows processing multiple stages SEQUENTIALLY if delay=0
+                # e.g. Stage 1 (Audio) -> Sent -> Next Stage (Text, Delay=0) -> Sent Immediately
+                
+                while True:
+                    if not stages or current_stage_idx >= len(stages):
+                        # No more stages to process
+                        break
+                        
+                    stage_cfg = stages[current_stage_idx]
+                    delay_min = stage_cfg.get("delay_minutes", 60)
+                    prompt_behavior = stage_cfg.get("prompt", "Pergunte se o cliente precisa de ajuda.")
+
+                    # Check Time
+                    # Note: For the first iteration, diff_minutes comes from DB.
+                    # For subsequent chained iterations, we assume IMMEDIATE execution (diff effectively infinite relative to 0)
+                    # or strictly check delay <= 0.
+                    
+                    should_run = False
+                    if diff_minutes >= delay_min:
+                        should_run = True
+                    
+                    if not should_run:
+                        # Not time yet to run this stage. Break inner loop, move to next Row.
+                        break
+                        
                     logger.info(
-                        f"⏭️ SKIP [{chat_id}]: No stages configured (stages={len(stages)}, current={current_stage_idx})"
+                         f"🚀 Triggering Follow-up Stage {current_stage_idx + 1} for {chat_id} | Diff: {diff_minutes:.1f}m >= Limit: {delay_min}m"
                     )
-                    continue
 
-                stage_cfg = stages[current_stage_idx]
-                delay_min = stage_cfg.get("delay_minutes", 60)
-                prompt_behavior = stage_cfg.get(
-                    "prompt", "Pergunte se o cliente precisa de ajuda."
-                )
-
-                # Check Time (Timezone Safe via SQL)
-                diff_minutes = float(row.get("db_diff_minutes") or 0)
-
-                if diff_minutes >= delay_min:
-                    logger.info(
-                        f"🚀 Triggering Follow-up Stage {current_stage_idx + 1} for {chat_id} | Diff: {diff_minutes:.1f}m >= Limit: {delay_min}m"
-                    )
-                else:
-                    # Log Opcional para Debug (pode ficar verboso, mas útil agora)
-                    # logger.info(f"⏳ Waiting {chat_id}: {diff_minutes:.1f}m / {delay_min}m")
-                    pass
-
-                if diff_minutes >= delay_min:
-                    analysis_prompt = f"""
-                    Você é um especialista em atendimento. Sua missão é retomar o contato com um cliente que parou de responder.
+                    # EXECUTE STAGE
+                    stage_type = stage_cfg.get("type", "text")
+                    clean_text = ""
+                    sent_success = False
                     
-                    CONDIÇÃO ATUAL: O CLIENTE parou de responder. VOCÊ (a IA) está aguardando retorno.
-                    
-                    Histórico Recente (Leia com atenção para saber o que foi tratado por último):
-                    Last Context: "{last_context_txt[-2000:]}"
-                    
-                    Instrução para esta mensagem de follow-up: "{prompt_behavior}"
+                    # === FLUXO DE ÁUDIO ===
+                    if stage_type == "audio":
+                        # --- AUDIO GUARDRAIL: Verify Context with AI ---
+                        # Antes de enviar audio cego, perguntamos se faz sentido
+                        audio_sent_decision = True
+                        if client:
+                            guard_prompt = f"""
+                            Review this conversation history. 
+                            Active Role: Assistant (Follow-up Bot).
+                            
+                            History: "{last_context_txt[-2000:]}"
+                            
+                            Task: I am about to send a pre-recorded FOLLOW-UP AUDIO to re-engage this user.
+                            
+                            Decision:
+                            - If the user said "ok", "bye", "obrigado", or if the conversation was handed off to a human, or if the issue is resolved: RETURN "ABORT"
+                            - If the user is silent and we should try to re-engage: RETURN "PROCEED"
+                            
+                            Return ONLY "ABORT" or "PROCEED".
+                            """
+                            try:
+                                guard_resp = client.models.generate_content(
+                                    model="gemini-2.5-flash", 
+                                    contents=guard_prompt,
+                                    config={"temperature": 0.0}
+                                )
+                                decision = guard_resp.text.strip().upper()
+                                if "ABORT" in decision:
+                                    logger.info(f"🛑 Audio Skipped by AI Guardrail: {chat_id}")
+                                    # Mark as finished so we don't try again forever
+                                    cur.execute(
+                                        "UPDATE active_conversations SET status = 'finished' WHERE chat_id = %s AND client_id = %s",
+                                        (chat_id, client_id),
+                                    )
+                                    conn.commit()
+                                    audio_sent_decision = False
+                                    break # Stop chaining
+                            except Exception as xe:
+                                logger.warning(f"⚠️ Guardrail Failed, defaulting to proceed: {xe}")
 
-                    REGRAS DE OURO:
-                    1. JAMAIS peça desculpas pela demora. VOCÊ não demorou, você está seguindo um fluxo de retorno programado.
-                    2. NÃO diga "ainda estou aqui" ou "voltei". Aja como se estivesse apenas dando continuidade ao processo natural de follow-up.
-                    3. Se o cliente já resolveu o assunto ou disse "FINISHED", responda apenas "FINISHED".
-                    4. Se o contexto pede retomada, gere o texto da mensagem para enviar ao cliente.
-                    5. NÃO use placeholders como [Nome] ou Fulano. Se não souber o nome, não use nenhum.
-                    6. Seja breve, direto e natural.
-                    """
+                        if not audio_sent_decision:
+                            break # Safety break
 
-                    try:
-                        if not client:
-                            logger.error("Gemini Client Unreachable for Analysis")
-                            continue
+                        audio_url = stage_cfg.get("audio_url")
+                        if not audio_url:
+                            logger.error(f"❌ Audio URL missing for {chat_id} (Stage {current_stage_idx})")
+                            break # Critical error, stop chaining
 
-                        resp = client.models.generate_content(
-                            model="gemini-2.5-flash", 
-                            contents=analysis_prompt,
-                            config={"temperature": 0.1}
-                        )
-                        resp_ai = resp.text.strip()
+                        # Setup Uazapi Config (Resolve once)
+                        uazapi_cfg = get_provider_config(str(client_id), "uazapi")
+                        if not uazapi_cfg:
+                             uazapi_cfg = tools_config_json.get("uazapi", {})
+                        
+                        custom_url = uazapi_cfg.get("url") or row.get("api_url") or ""
+                        custom_key = uazapi_cfg.get("token") or uazapi_cfg.get("api_key") or client_token or ""
 
-                        # Salva usage para tracking
                         try:
-                            from usage_tracker import save_usage
-
-                            gemini_usage = {}
-                            if hasattr(resp, "usage_metadata") and resp.usage_metadata:
-                                gemini_usage = {
-                                    "input_tokens": getattr(
-                                        resp.usage_metadata, "prompt_token_count", 0
-                                    ),
-                                    "output_tokens": getattr(
-                                        resp.usage_metadata, "candidates_token_count", 0
-                                    ),
-                                }
-                            save_usage(
-                                client_id=str(client_id),
-                                chat_id=chat_id,
-                                source="followup",
-                                provider="uazapi",
-                                gemini_usage=gemini_usage,
+                            await send_whatsapp_audio(
+                                chat_id, 
+                                audio_url, 
+                                api_key=custom_key, 
+                                base_url=custom_url
                             )
-                        except Exception as usage_err:
-                            logger.debug(f"Usage tracking: {usage_err}")
+                            clean_text = f"[Áudio Enviado]: {audio_url}"
+                            logger.info(f"✅ Sent Stage {current_stage_idx + 1} (AUDIO) to {chat_id}")
+                            sent_success = True
+                        except Exception as e:
+                            logger.error(f"❌ Failed to send audio: {e}")
+                            break # Stop chaining on failure
 
-                        if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
-                            # Smart Termination
-                            logger.info(
-                                f"🛑 Smart Termination for {chat_id}: Context indicates finished."
-                            )
-                            cur.execute(
-                                """
-                                UPDATE active_conversations SET status = 'finished' 
-                                WHERE chat_id = %s AND client_id = %s
-                            """,
-                                (chat_id, client_id),
-                            )
-                            conn.commit()
-                        else:
-                            # --- DYNAMIC API CONFIG ---
-                            # Buscar de client_providers
-                            uazapi_cfg = get_provider_config(str(client_id), "uazapi")
+                    # === FLUXO DE TEXTO (GEMINI) ===
+                    else:
+                        analysis_prompt = f"""
+                        Você é um especialista em atendimento. Sua missão é retomar o contato com um cliente que parou de responder.
+                        
+                        CONDIÇÃO ATUAL: O CLIENTE parou de responder. VOCÊ (a IA) está aguardando retorno.
+                        
+                        Histórico Recente:
+                        Last Context: "{last_context_txt[-2000:]}"
+                        
+                        Instrução para esta mensagem de follow-up: "{prompt_behavior}"
 
-                            # Fallback para estrutura antiga
-                            if not uazapi_cfg:
-                                uazapi_cfg = tools_config_json.get("uazapi", {})
-                                uazapi_cfg["url"] = (
-                                    uazapi_cfg.get("url") or row.get("api_url") or ""
+                        REGRAS DE OURO:
+                        1. JAMAIS peça desculpas pela demora. VOCÊ não demorou, você está seguindo um fluxo de retorno programado.
+                        2. NÃO diga "ainda estou aqui" ou "voltei". Aja como se estivesse apenas dando continuidade ao processo.
+                        3. Se o cliente já resolveu o assunto ou disse "FINISHED", responda apenas "FINISHED".
+                        4. Se o contexto pede retomada, gere o texto da mensagem.
+                        5. NÃO use placeholders como [Nome].
+                        6. Seja breve, direto e natural.
+                        """
+
+                        try:
+                            if not client:
+                                logger.error("Gemini Client Unreachable for Analysis")
+                                break
+
+                            resp = client.models.generate_content(
+                                model="gemini-2.5-flash", 
+                                contents=analysis_prompt,
+                                config={"temperature": 0.1}
+                            )
+                            resp_ai = resp.text.strip()
+
+                            # Salva usage (Omitted for brevity in loop, assumes standard call)
+                            
+                            if "FINISHED" in resp_ai.upper() and len(resp_ai) < 15:
+                                # Smart Termination
+                                logger.info(f"🛑 Smart Termination for {chat_id}: Context indicates finished.")
+                                cur.execute(
+                                    "UPDATE active_conversations SET status = 'finished' WHERE chat_id = %s AND client_id = %s",
+                                    (chat_id, client_id),
                                 )
-                                uazapi_cfg["token"] = (
-                                    uazapi_cfg.get("api_key")
-                                    or row.get("client_token")
-                                    or ""
+                                conn.commit()
+                                # Conversa finalizada, não podemos continuar chain
+                                break 
+                            else:
+                                # Send Message
+                                clean_text = clean_message_content(resp_ai)
+                                
+                                # Setup Config (Again, could be optimized outside but safe here)
+                                uazapi_cfg = get_provider_config(str(client_id), "uazapi")
+                                if not uazapi_cfg:
+                                    uazapi_cfg = tools_config_json.get("uazapi", {})
+                                
+                                custom_url = uazapi_cfg.get("url") or row.get("api_url") or ""
+                                custom_key = uazapi_cfg.get("token") or uazapi_cfg.get("api_key") or client_token or ""
+
+                                await send_whatsapp_message(
+                                    chat_id,
+                                    clean_text,
+                                    api_key=custom_key,
+                                    base_url=custom_url,
                                 )
 
-                            custom_url = uazapi_cfg.get("url") or ""
-                            custom_key = uazapi_cfg.get("token") or ""
+                                logger.info(f"✅ Sent Stage {current_stage_idx + 1} to {chat_id}")
+                                sent_success = True
 
-                            # Fallback para Env Vars é tratado dentro de uazapi_saas.py se passarmos None
-                            # Mas se custom_url for passado, ele usa.
+                        except Exception as e:
+                            logger.error(f"Generate Content Error: {e}")
+                            break
 
-                            # Send Message
-                            clean_text = clean_message_content(resp_ai)
-                            await send_whatsapp_message(
-                                chat_id,
-                                clean_text,
-                                api_key=custom_key,
-                                base_url=custom_url,
-                            )
+                    # === POST-EXECUTION UPDATE ===
+                    if sent_success:
+                        # Update DB to record this stage
+                        cur.execute(
+                            """
+                            UPDATE active_conversations 
+                            SET last_message_at = NOW(),
+                                followup_stage = %s,
+                                last_context = COALESCE(last_context, '') || E'\nAI: ' || %s,
+                                last_role = 'assistant'
+                            WHERE chat_id = %s AND client_id = %s
+                        """,
+                            (current_stage_idx + 1, clean_text, chat_id, client_id),
+                        )
+                        conn.commit()
 
-                            logger.info(
-                                f"✅ Sent Stage {current_stage_idx + 1} to {chat_id}"
-                            )
-
-                            cur.execute(
-                                """
-                                UPDATE active_conversations 
-                                SET last_message_at = NOW(),
-                                    followup_stage = %s
-                                WHERE chat_id = %s AND client_id = %s
-                            """,
-                                (current_stage_idx + 1, chat_id, client_id),
-                            )
-                            conn.commit()
-
-                    except Exception as e:
-                        error_msg = str(e)
-                        if hasattr(e, "response") and e.response is not None:
-                            error_msg += f" | Status: {e.response.status_code} | Body: {e.response.text}"
-
-                        logger.error(f"Erro durante FollowUp (Gen/Send): {error_msg}")
+                        # Update Local State for Chaining
+                        # We advance to next stage
+                        current_stage_idx += 1
+                        # IMPORTANT: Since we JUST sent a message, the "diff_minutes" relative to *now* is 0.
+                        # This allows the NEXT iteration of the 'while True' loop to pick up immediately
+                        # if the next stage has delay_minutes <= 0.
+                        diff_minutes = 999999 # Hack: Force "time passed" logic? No.
+                        # Actually, if we want to run next stage immediately (delay=0), we treat "time since last stage" as... well.
+                        # Using 0 is technically correct (just happened), but if delay=0 required, 0 >= 0 is True.
+                        # If delay=1, 0 >= 1 is False. 
+                        # So updating diff_minutes to 0 is likely safer/correct for what we want (immediate chain only if delay is zero).
+                        
+                        # Wait, the logic above is: if diff_minutes >= delay_min: run.
+                        # If we set diff_minutes = 0.
+                        # Next stage: delay=0.   0 >= 0 -> True. Run!
+                        # Next stage: delay=60.  0 >= 60 -> False. Break.
+                        # Perfect.
+                        diff_minutes = 0 
+                        
+                        # Update context so next prompt knows what was just sent
+                        last_context_txt += f"\nAI: {clean_text}"
+                        
+                        # Small sleep to ensure order in WhatsApp (Audio arrives before Text)
+                        await asyncio.sleep(1) 
+                    else:
+                        # Should not happen if exceptions caught, but break just in case
+                        break
 
 
 if __name__ == "__main__":

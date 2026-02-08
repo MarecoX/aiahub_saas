@@ -43,6 +43,54 @@ async def send_whatsapp_message(
         raise RuntimeError(f"Erro ao enviar: {exc}") from exc
 
 
+async def send_whatsapp_reaction(
+    number: str,
+    message_id: str,
+    emoji: str,
+    api_key: str = None,
+    base_url: str = None,
+) -> dict:
+    """
+    Envia uma reação (emoji) para uma mensagem específica.
+    Para remover, envie emoji="".
+    """
+    url = (base_url or DEFAULT_UAZAPI_URL).rstrip("/")
+    token = api_key or DEFAULT_UAZAPI_KEY
+
+    if not url or not token:
+        logger.error("❌ ERRO: URL ou Token do Uazapi não definidos!")
+        raise ValueError("Uazapi Credentials Missing")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "number": number,
+                "text": emoji or "",  # String vazia remove a reação
+                "id": message_id,
+            }
+            
+            logger.info(f"📤 Enviando Reação: {payload} para {url}/message/react") # DEBUG LOG
+            
+            resp = await client.post(
+                f"{url}/message/react",
+                json=payload,
+                headers={"token": f"{token}", "Content-Type": "application/json"}, # Explicit Header
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            logger.info(f"👍 [SaaS] Reação '{emoji}' enviada para {number} (Msg: {message_id})")
+            return resp.json()
+
+    except httpx.HTTPError as exc:
+        logger.error(f"❌ Erro HTTP Uazapi (Reaction): {exc}")
+        if hasattr(exc, "response") and exc.response:
+             logger.error(f"Body: {exc.response.text}")
+        raise RuntimeError(f"Erro ao enviar reação: {exc}") from exc
+    except Exception as exc:
+        logger.error(f"❌ Erro Genérico Uazapi (Reaction): {exc}")
+        raise RuntimeError(f"Erro ao enviar reação: {exc}") from exc
+
+
 async def send_whatsapp_audio(
     number: str, audio_url: str, api_key: str = None, base_url: str = None
 ) -> dict:

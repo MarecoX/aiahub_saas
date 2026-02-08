@@ -263,6 +263,29 @@ async def process_pending_reminders():
                     )
 
                     await update_reminder_status(reminder_id, "sent", clean_text)
+                    
+                    # --- CRITICAL FIX: Sync Context to Active Conversations ---
+                    try:
+                        with get_connection() as conn_ctx:
+                            with conn_ctx.cursor() as cur_ctx:
+                                cur_ctx.execute(
+                                    """
+                                    INSERT INTO active_conversations (chat_id, client_id, last_message_at, last_role, status, last_context)
+                                    VALUES (%s, %s, NOW(), 'assistant', 'active', %s)
+                                    ON CONFLICT (chat_id, client_id) DO UPDATE SET
+                                        last_message_at = NOW(),
+                                        last_role = 'assistant',
+                                        status = 'active',
+                                        last_context = COALESCE(active_conversations.last_context, '') || E'\nAI: ' || EXCLUDED.last_context;
+                                """,
+                                    (chat_id, client_id, f"Lembrete enviado: {clean_text}"),
+                                )
+                                conn_ctx.commit()
+                        logger.info(f"🔄 Contexto atualizado para {chat_id} (Reminder Sent)")
+                    except Exception as ctx_err:
+                        logger.error(f"⚠️ Erro ao atualizar contexto do lembrete: {ctx_err}")
+                    # ----------------------------------------------------------
+
                     logger.info(f"✅ Lembrete {reminder_id} enviado para {chat_id}")
                     sent += 1
                 else:

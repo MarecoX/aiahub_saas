@@ -44,17 +44,39 @@ def render_followup_tab(user_data):
     for i, stage in enumerate(current_stages):
         with st.expander(f"Etapa {i + 1}", expanded=True):
             c1, c2 = st.columns([2, 1])
-            stage["delay_minutes"] = c1.number_input(
+            stage_type = c1.selectbox(
+                "Tipo de Mensagem", 
+                ["Texto (IA)", "Áudio Gravado"], 
+                index=0 if stage.get("type", "text") == "text" else 1,
+                key=f"t_{user_data['id']}_{i}"
+            )
+            stage["type"] = "audio" if stage_type == "Áudio Gravado" else "text"
+            
+            stage["delay_minutes"] = c2.number_input(
                 "Esperar (minutos)",
-                min_value=1,
+                min_value=0,
                 value=int(stage.get("delay_minutes", 60)),
                 key=f"d_{user_data['id']}_{i}",
+                help="0 = Enviar junto com a mensagem anterior (Cadeia)."
             )
-            stage["prompt"] = st.text_area(
-                "Instrução para IA",
-                value=stage.get("prompt", "Pergunte se precisa de ajuda."),
-                key=f"p_{user_data['id']}_{i}",
-            )
+            
+            if stage["type"] == "text":
+                stage["prompt"] = st.text_area(
+                    "Instrução para IA",
+                    value=stage.get("prompt", "Pergunte se precisa de ajuda."),
+                    key=f"p_{user_data['id']}_{i}",
+                )
+                stage["audio_url"] = None
+            else:
+                stage["audio_url"] = st.text_input(
+                    "URL do Áudio (MP3/OGG)",
+                    value=stage.get("audio_url", ""),
+                    placeholder="https://exemplo.com/audio.mp3",
+                    key=f"a_{user_data['id']}_{i}",
+                    help="Link direto para o arquivo de áudio. Deve ser público."
+                )
+                stage["prompt"] = None
+
             if st.button("🗑️ Remover Etapa", key=f"rem_{user_data['id']}_{i}"):
                 indices_to_remove.append(i)
 

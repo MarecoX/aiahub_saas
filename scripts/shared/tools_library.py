@@ -1,12 +1,58 @@
+import sys
 import os
 import httpx
 import logging
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import Field
 from langchain.tools import tool
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger("KestraTools")
+
+# Garante que o diretório atual está no path para as ferramentas (Docker/Kestra fix)
+_shared_dir = os.path.dirname(os.path.abspath(__file__))
+if _shared_dir not in sys.path:
+    sys.path.append(_shared_dir)
+# Adiciona também o diretório pai (scripts) para suportar scripts.shared...
+_scripts_dir = os.path.abspath(os.path.join(_shared_dir, ".."))
+if _scripts_dir not in sys.path:
+    sys.path.append(_scripts_dir)
+
+try:
+    # 1. Tenta import direto (se shared_dir estiver no path)
+    from sgp_tools import get_sgp_tools
+
+    logger.info("✅ SGP Tools carregadas via import direto.")
+except ImportError:
+    try:
+        # 2. Tenta via scripts.shared (se root estiver no path - fallback Kestra)
+        from scripts.shared.sgp_tools import get_sgp_tools
+
+        logger.info("✅ SGP Tools carregadas via scripts.shared.")
+    except ImportError:
+        try:
+            # 3. Tenta via Kestra_2.0 path absoluto
+            import importlib.util
+
+            sgp_path = os.path.join(_shared_dir, "sgp_tools.py")
+            if os.path.exists(sgp_path):
+                spec = importlib.util.spec_from_file_location(
+                    "sgp_tools_dynamic", sgp_path
+                )
+                m = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(m)
+                get_sgp_tools = m.get_sgp_tools
+                logger.info("✅ SGP Tools carregadas via importlib (Path Absoluto).")
+            else:
+                raise ImportError(f"Arquivo não encontrado: {sgp_path}")
+        except Exception as e:
+            error_msg = str(e)
+
+            def get_sgp_tools():
+                logger.warning(f"⚠️ SGP Tools fallback (vazio) ativado: {error_msg}")
+                return []
+
+
 # Tenta pegar API Key do Maps, ou fallback pro Gemini (se for a mesma key irrestrita)
 # Obtém chave específica do Maps. SEM fallback para Gemini para evitar erros de permissão.
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
@@ -26,8 +72,23 @@ try:
         reschedule_booking,
         cancel_booking,
     )
+    from saas_db import get_provider_config
 except ImportError:
     # Tenta importar do caminho completo (setup local/IDE)
+    try:
+        from scripts.shared.cal_tools import (
+            get_available_slots,
+            create_booking,
+            reschedule_booking,
+            cancel_booking,
+        )
+        from scripts.shared.saas_db import get_provider_config
+    except ImportError:
+        # Fallback final se saas_db não estiver no path
+        def get_provider_config(*args, **kwargs):
+            return {}
+
+        pass
     try:
         from scripts.shared.cal_tools import (
             get_available_slots,
@@ -214,17 +275,6 @@ def qualificado_kommo_provedor(
 
 
 @tool
-def audio(texto: str):
-    """
-    Gera um áudio falando o texto fornecido (TTS) e envia para o chat.
-    Use para dar boas-vindas ou explicações complexas.
-    """
-    # Lógica Mock - Precisaria integrar com OpenAI TTS ou Google TTS e salvar no bucket
-    logger.info(f"🔊 Gerando Áudio: {texto}")
-    return {"status": "sent", "message": "Áudio enviado (Simulado)"}
-
-
-@tool
 def consultar_erp(nome_produto: str, betel_config: dict = None):
     """
     Consulta o ERP (Betel) para verificar preço e estoque de um produto.
@@ -344,7 +394,7 @@ def enviar_relatorio(
         resp = asyncio.run(_send())
         if resp.status_code in [200, 201]:
             logger.info(f"✅ Relatório enviado para grupo {grupo_id}")
-            return "Relatório enviado com sucesso para o grupo."
+            return "SUCESSO: Relatório enviado. AÇÃO CONCLUÍDA. NÃO chame esta ferramenta novamente. Apenas responda ao usuário confirmando."
         else:
             logger.error(f"❌ Erro Uazapi: {resp.status_code} - {resp.text}")
             return f"Erro ao enviar relatório: {resp.status_code}"
@@ -670,7 +720,7 @@ def consultar_viabilidade_hubsoft(
 
         return {
             "viavel": True,
-            "mensagem": f"Boa notícia! Temos cobertura disponível neste endereço.",
+            "mensagem": "Boa notícia! Temos cobertura disponível neste endereço.",
             "endereco_consultado": f"{endereco}, {numero} - {bairro}, {cidade}/{estado}",
             "projetos_disponiveis": projetos_formatados,
             "total_projetos": len(projetos_formatados),
@@ -695,14 +745,19 @@ AVAILABLE_TOOLS = {
     "atendimento_humano": atendimento_humano,
     "desativar_ia": desativar_ia,
     "criar_lembrete": criar_lembrete,
-    "audio": audio,
     "consultar_viabilidade_hubsoft": consultar_viabilidade_hubsoft,
     "cal_dot_com": "cal_dot_com",  # Placeholder para group tool
+    "whatsapp_reactions": "whatsapp_reactions",  # String para evitar NameError
+    "sgp_tools": "sgp_tools",  # Placeholder para SGP (Viabilidade + Pré-Cadastro)
+    "rag_active": "rag_active",  # Tool de Pesquisa em Documentos (Base de Conhecimento)
 }
 
 
 def get_enabled_tools(
-    tools_config: dict, chat_id: str = None, client_config: dict = None
+    tools_config: dict,
+    chat_id: str = None,
+    client_config: dict = None,
+    last_msg_id: str = None,
 ):
     """
     Retorna a lista de funcoes Python para passar pro Gemini.
@@ -717,6 +772,31 @@ def get_enabled_tools(
     }
     """
     tools = []
+
+    uazapi_url_cfg = ""
+    uazapi_token_cfg = ""
+
+    if client_config:
+        # MIGRATION: Fetch credentials from client_providers table
+        client_id = str(client_config.get("id"))
+        try:
+            from scripts.shared.saas_db import get_provider_config
+
+            provider_cfg = get_provider_config(client_id, "uazapi")
+            if provider_cfg:
+                uazapi_url_cfg = provider_cfg.get("url")
+                uazapi_token_cfg = provider_cfg.get("token")
+                logger.info(
+                    f"🔄 Credenciais Uazapi carregadas do banco para cliente {client_id}"
+                )
+        except Exception as e:
+            logger.debug(f"ℹ️ Busca de provider no banco pulada ou falhou: {e}")
+
+    # Fallback para Env se banco estiver vazio
+    if not uazapi_url_cfg:
+        uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
+    if not uazapi_token_cfg:
+        uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
     if not tools_config:
         logger.warning("⚠️ Tools Config is empty or None!")
         return []
@@ -729,11 +809,11 @@ def get_enabled_tools(
             # Se a config for um dicionário e estiver ativa
             # Ex: {"active": true, "url": "..."} ou apenas {"url": "..."} (implícito active)
             config_dict = config_value if isinstance(config_value, dict) else {}
-            is_active = (
-                config_dict.get("active", True)
-                if isinstance(config_value, dict)
-                else bool(config_value)
-            )
+            if isinstance(config_value, dict):
+                is_active = config_value.get("active", False)
+            elif isinstance(config_value, bool):
+                is_active = config_value
+
             if is_active:
                 if (
                     isinstance(config_value, dict)
@@ -811,27 +891,8 @@ def get_enabled_tools(
                         else "nome, cpf, email, telefone, etc."
                     )
 
-                    # Uazapi configs
-                    uazapi_url_cfg = ""
-                    uazapi_token_cfg = ""
-                    if client_config:
-                        uazapi_config = client_config.get("tools_config", {}).get(
-                            "whatsapp", {}
-                        )
-                        uazapi_url_cfg = client_config.get(
-                            "api_url"
-                        ) or uazapi_config.get("url")
-                        uazapi_token_cfg = client_config.get(
-                            "token"
-                        ) or uazapi_config.get("key")
-                        logger.info(
-                            f"🔍 DEBUG UAZAPI CONFIG: Url={uazapi_url_cfg}, Token={uazapi_token_cfg}"
-                        )
-
-                    if not uazapi_url_cfg:
-                        uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
-                    if not uazapi_token_cfg:
-                        uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
+                    # Uazapi configs já inicializadas no topo da função get_enabled_tools
+                    # Uazapi configs já carregadas no topo da função
 
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
@@ -871,8 +932,10 @@ def get_enabled_tools(
                                 }
                                 dados_final.update(dados_extra)
 
-                            # Auto-injeta ou corrige telefone
-                            tel_candidato = dados_final.get("telefone", "")
+                            # Auto-injeta ou corrige telefone (suporta alias: numero_do_cliente)
+                            tel_candidato = dados_final.get(
+                                "telefone"
+                            ) or dados_final.get("numero_do_cliente", "")
                             # Limpa caracteres não numéricos para checagem
                             tel_limpo = "".join(filter(str.isdigit, str(tel_candidato)))
 
@@ -882,7 +945,10 @@ def get_enabled_tools(
                                     logger.warning(
                                         f"⚠️ Telefone inválido detectado ('{tel_candidato}'). Substituindo pelo do Chat ID: {telefone_auto}"
                                     )
+                                    # Injeta em ambos os campos possíveis
                                     dados_final["telefone"] = telefone_auto
+                                    if "numero_do_cliente" in dados_final:
+                                        dados_final["numero_do_cliente"] = telefone_auto
                                 else:
                                     # Se válido, mantém (pode ser outro número que o cliente passou)
                                     pass
@@ -892,25 +958,29 @@ def get_enabled_tools(
                                     "⚠️ Relatório sem telefone! (Chat ID inválido e IA não extraiu)"
                                 )
 
-                            # VALIDAÇÃO: Precisa ter pelo menos 3 campos preenchidos (além de telefone)
-                            campos_validos = [
-                                k for k in dados_final.keys() if k != "telefone"
-                            ]
-                            if len(campos_validos) < 3:
+                            # Formata telefone (remove @s.whatsapp.net se presente)
+                            if dados_final.get("telefone"):
+                                dados_final["telefone"] = str(
+                                    dados_final["telefone"]
+                                ).split("@")[0]
+                            if dados_final.get("numero_do_cliente"):
+                                dados_final["numero_do_cliente"] = str(
+                                    dados_final["numero_do_cliente"]
+                                ).split("@")[0]
+
+                            # VALIDAÇÃO: Precisa ter pelo menos 2 campos preenchidos (inclui telefone)
+                            campos_validos = list(dados_final.keys())
+                            if len(campos_validos) < 2:
                                 logger.warning(
-                                    f"⚠️ Dados insuficientes para relatório: {len(campos_validos)} campos. Mínimo: 3"
+                                    f"⚠️ Dados insuficientes para relatório: {len(campos_validos)} campos. Mínimo: 2"
                                 )
-                                campos_faltando = [
-                                    f
-                                    for f in known_fields
-                                    if f not in dados_final and f != "telefone"
-                                ]
-                                return f"Erro: Dados insuficientes para enviar relatório. Colete primeiro: {', '.join(campos_faltando[:5])}..."
+                                # Mensagem clara para IA PARAR de tentar (evita loop infinito)
+                                return "AÇÃO CANCELADA: Ainda não há dados suficientes para enviar relatório. NÃO tente novamente agora. Continue a conversa normalmente e colete as informações necessárias primeiro."
 
                             logger.info(
                                 f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}"
                             )
-                            return f(
+                            response_msg = f(
                                 tipo=tipo,
                                 dados=dados_final,
                                 grupo_id=grp,
@@ -918,6 +988,14 @@ def get_enabled_tools(
                                 uazapi_token=tkn,
                                 template=tpl,
                             )
+
+                            # Se houve correção automática, avisa no retorno para a IA ficar ciente
+                            if telefone_auto and (
+                                not tel_candidato or len(tel_limpo) < 10
+                            ):
+                                response_msg += f" (Nota: O telefone foi corrigido automaticamente para {telefone_auto}. NÃO reenvie.)"
+
+                            return response_msg
 
                         return wrapped_relatorio
 
@@ -1078,7 +1156,7 @@ Campos esperados: {placeholders_str}""",
                             cidade: str,
                             estado: str,
                         ):
-                            """Consulta viabilidade de cobertura de internet em um endereço usando HubSoft."""
+                            """HUBSOFT: Consulta viabilidade de internet usando o ENDEREÇO COMPLETO (Rua, Número, Bairro, Cidade, UF). Use esta ferramenta se o cliente fornecer o endereço detalhado."""
                             return f(
                                 endereco=endereco,
                                 numero=numero,
@@ -1201,7 +1279,161 @@ Campos esperados: {placeholders_str}""",
                         )
 
                         logger.info("📅 Tools Cal.com v2 Ativadas!")
+                # SGP Tools Integration
+                elif tool_name == "sgp_tools":
+                    # Injeta dependencias do SGP (URL, Token, App)
+                    sgp_cfg = {k: v for k, v in config_value.items() if k != "active"}
+                    try:
+                        sgp_list = get_sgp_tools()
+                        for s_tool in sgp_list:
+                            orig_func = s_tool.func
+
+                            def create_sgp_wrapper(f, s_cfg):
+                                def wrapped_sgp(**kwargs):
+                                    return f(**kwargs, sgp_config=s_cfg)
+
+                                return wrapped_sgp
+
+                            wrapped_f = create_sgp_wrapper(orig_func, sgp_cfg)
+                            tools.append(
+                                StructuredTool.from_function(
+                                    func=wrapped_f,
+                                    name=s_tool.name,
+                                    description=s_tool.description,
+                                    args_schema=s_tool.args_schema,
+                                )
+                            )
+                        logger.info(
+                            f"🔧 SGP Tools Ativadas (Injetadas): {[t.name for t in sgp_list]}"
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao carregar SGP Tools: {e}")
+
+                elif tool_name == "whatsapp_reactions":
+                    if chat_id:
+                        # Pega configs do Uazapi já processadas anteriormente (linhas 806+)
+                        # Mas como estão locais no loop, melhor pegar de client_config de novo ou usar as vars do escopo se acessíveis
+                        # Vamos recalcular ou usar o que já temos se possível.
+                        # Na verdade, uazapi_url_cfg e uazapi_token_cfg foram calculados no inicio do loop SIM.
+                        # Eles estão no escopo da função get_enabled_tools?
+                        # Estão dentro do loop 'for tool_name in tools_config:'.
+                        # Sim, e o elif está no loop. Então podemos usar uazapi_url_cfg e uazapi_token_cfg.
+
+                        current_url = uazapi_url_cfg
+                        current_token = uazapi_token_cfg
+
+                        def react_standard(emoji: str, message_id: str):
+                            """
+                            Envia uma reação (emoji) para uma mensagem específica.
+                            Args:
+                                emoji: O emoji para reagir (ex: 👍, ❤️).
+                                message_id: O ID da mensagem que receberá a reação (obrigatório).
+                            """
+                            return _reagir_mensagem_sync(
+                                emoji=emoji,
+                                message_id=message_id,
+                                chat_id=chat_id,
+                                api_url=current_url,
+                                api_token=current_token,
+                            )
+
+                        # Cria a ferramenta estruturada
+                        standard_tool = StructuredTool.from_function(
+                            func=react_standard,
+                            name="reagir_mensagem",
+                            description="AÇÃO DE INTERFACE: Envia reação para uma mensagem. Requer 'message_id' (veja no prompt) e 'emoji'.",
+                        )
+                        tools.append(standard_tool)
+                        logger.info(
+                            f"🔧 Tool Ativada: reagir_mensagem (STANDARD BOUND) -> Chat: {chat_id}"
+                        )
+                elif tool_name == "rag_active":
+                    # Injeta Base de Conhecimento (RAG) se houver Store ID
+                    from chains_saas import create_knowledge_base_tool
+
+                    store_id = client_config.get(
+                        "gemini_store_id"
+                    ) or client_config.get("store_id")
+                    if store_id:
+                        kb_tool = create_knowledge_base_tool(store_id)
+                        tools.append(kb_tool)
+                        logger.info(
+                            f"📎 Tool Enterprise Docs (RAG) injetada dinamicamente: {store_id}"
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ rag_active solicitado mas client_config sem store_id!"
+                        )
                 else:
+                    # SAFETY GUARD: Ignore placeholders (strings) that fall through
+                    if isinstance(tool_func, str):
+                        logger.warning(
+                            f"⚠️ Placeholder tool detected & skipped: {tool_name} (Safety Guard)"
+                        )
+                        continue
+
                     tools.append(tool_func)
                     logger.info(f"🔧 Tool Ativada: {tool_name}")
     return tools or None
+
+
+def _reagir_mensagem_sync(
+    emoji: str,
+    message_id: str,
+    chat_id: str = None,
+    api_url: str = None,
+    api_token: str = None,
+):
+    """Implementação interna da lógica de reação."""
+    # IMPORTANTE: Implementação SÍNCRONA para compatibilidade com Agent Executor
+
+    # Tenta usar args, senão env vars
+    url = api_url or os.getenv("UAZAPI_URL")
+    token = api_token or os.getenv("UAZAPI_KEY")
+
+    if not url or not token:
+        return {
+            "error": "Credenciais Uazapi (URL/KEY) não encontradas (Env ou Config)."
+        }
+
+    # Sanitize URL
+    url = url.rstrip("/")
+
+    if not chat_id:
+        return {"error": "chat_id é obrigatório para reagir."}
+
+    logger.info(f"📤 [SYNC] Enviando Reação: {emoji} para {chat_id} (ID: {message_id})")
+
+    try:
+        # Uso de cliente Síncrono (httpx.Client)
+        with httpx.Client() as client:
+            payload = {
+                "number": chat_id,
+                "text": emoji or "",
+                "id": message_id,
+            }
+            resp = client.post(
+                f"{url}/message/react",
+                json=payload,
+                headers={"token": f"{token}", "Content-Type": "application/json"},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao reagir (Sync): {e}")
+        return {"error": f"Erro ao reagir: {str(e)}"}
+
+
+@tool
+def reagir_mensagem(emoji: str, message_id: str, chat_id: str = None):
+    """
+    AÇÃO DE INTERFACE: Envia uma reação (emoji) para uma mensagem do WhatsApp.
+    USE ESTA FERRAMENTA SEMPRE QUE FOR INSTRUÍDO A REAGIR.
+    Args:
+        emoji (str): O emoji para reagir (ex: 👍, ❤️).
+        message_id (str): O ID da mensagem (fornecido no prompt).
+        chat_id (str): O RemoteJid (fornecido no prompt).
+    """
+    return _reagir_mensagem_sync(emoji, message_id, chat_id)

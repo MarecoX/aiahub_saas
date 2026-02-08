@@ -82,9 +82,9 @@ def _split_natural_messages(text: str) -> list[str]:
             # Continuação de lista -> Agrupa
             current_block.append(line)
         else:
-            # Mudança de contexto (Texto <-> Lista ou Texto <-> Texto) -> Quebra
-            chunks.append("\n".join(current_block))
-            current_block = [line]
+            # MUDANÇA: Agora agrupa TUDO (não divide por contexto)
+            # Só divide se a IA gerou \n\n explícito (tratado antes)
+            current_block.append(line)
 
     if current_block:
         chunks.append("\n".join(current_block))
