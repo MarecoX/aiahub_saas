@@ -8,7 +8,7 @@ root_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-from scripts.shared.saas_db import (
+from scripts.shared.saas_db import (  # noqa: E402
     get_connection,
     get_provider_config,
     upsert_provider_config,
@@ -441,30 +441,79 @@ def render_tools_tab(user_data):
 
     st.divider()
 
-    # --- WhatsApp Reactions ---
-    st.subheader("👍 Reações do WhatsApp")
-    react_cfg = t_config.get("whatsapp_reactions", {})
-    if isinstance(react_cfg, bool):
-        react_cfg = {"active": react_cfg}
+    # ==========================================
+    # 📱 WHATSAPP AVANÇADO (Configurações Gerais)
+    # ==========================================
+    st.header("📱 WhatsApp Avançado")
+    st.caption("Configure comportamento, reações e segurança do seu número.")
 
-    c_react_active = st.toggle(
-        "Ativar Reações (Emojis)",
-        value=react_cfg.get("active", False),
-        help="Permite que a IA reaja às mensagens do cliente com emojis (👍, ❤️, 😂).",
-    )
+    # 1. Reações (Emojis)
+    with st.expander("👍 Reações e Interatividade", expanded=True):
+        react_cfg = t_config.get("whatsapp_reactions", {})
+        if isinstance(react_cfg, bool):
+            react_cfg = {"active": react_cfg}
 
-    react_instructions = react_cfg.get("instructions", "")
-
-    if c_react_active:
-        react_instructions = st.text_area(
-            "Quando reagir?",
-            value=react_instructions,
-            height=80,
-            placeholder="Ex: Reaja com 👀 em toda mensagem nova. Use 👍 quando cliente confirmar algo.",
-            help="Instrua a IA sobre quando e qual emoji usar. Essas instruções serão adicionadas ao prompt.",
+        c_react_active = st.toggle(
+            "Ativar Reações (Emojis)",
+            value=react_cfg.get("active", False),
+            help="Permite que a IA reaja às mensagens do cliente com emojis (👍, ❤️, 😂).",
         )
 
-    st.divider()
+        react_instructions = react_cfg.get("instructions", "")
+
+        if c_react_active:
+            react_instructions = st.text_area(
+                "Quando reagir?",
+                value=react_instructions,
+                height=80,
+                placeholder="Ex: Reaja com 👀 em toda mensagem nova. Use 👍 quando cliente confirmar algo.",
+                help="Instrua a IA sobre quando e qual emoji usar.",
+            )
+
+    # 2. Modo Humanizado (Split)
+    with st.expander("💬 Modo Humanizado (Estilo de Escrita)", expanded=True):
+        # Load WhatsApp specific config
+        wa_config = t_config.get("whatsapp", {})
+        # Backwards compatibility check
+        if t_config.get("split_by_paragraph"):
+            wa_config["split_by_paragraph"] = True
+
+        c_split_active = st.toggle(
+            "Picotar Mensagens (Dividir em parágrafos)",
+            value=wa_config.get("split_by_paragraph", False),
+            help="Se ativado, envia várias mensagens curtas. Se desativado, envia blocos maiores.",
+        )
+
+        if c_split_active:
+            st.caption("✅ Ativado: Quebra parágrafos (somente quando tiver `\\n\\n`).")
+        else:
+            st.caption(
+                "ℹ️ Desativado: Agrupa o texto (Listas e `\\n` simples continuam juntos)."
+            )
+
+    # 3. Segurança (Listas)
+    with st.expander("🛡️ Segurança e Controle (Whitelist/Blocklist)", expanded=False):
+        security_cfg = t_config.get("security_lists", {})
+
+        col_sec1, col_sec2 = st.columns(2)
+
+        with col_sec1:
+            s_whitelist = st.text_area(
+                "✅ Permitir APENAS estes (Whitelist)",
+                value=security_cfg.get("allowed_numbers", ""),
+                placeholder="Ex: 5511999999999",
+                help="Se tiver números aqui, o robô IGNORA todo o resto.",
+                height=100,
+            )
+
+        with col_sec2:
+            s_blocklist = st.text_area(
+                "🚫 Bloquear estes (Blocklist)",
+                value=security_cfg.get("blocked_numbers", ""),
+                placeholder="Ex: 5511777777777",
+                help="Estes números nunca serão atendidos.",
+                height=100,
+            )
 
     st.divider()
 
@@ -631,6 +680,15 @@ def render_tools_tab(user_data):
             "sgp_url": sgp_url if c_sgp_active else "",
             "sgp_token": sgp_token if c_sgp_active else "",
             "sgp_app": sgp_app if c_sgp_active else "",
+        }
+
+        # Save WhatsApp Config (Humanized Mode)
+        new_tools_config["whatsapp"] = {"split_by_paragraph": c_split_active}
+
+        # Save Security Lists
+        new_tools_config["security_lists"] = {
+            "allowed_numbers": s_whitelist,
+            "blocked_numbers": s_blocklist,
         }
 
         try:

@@ -8,7 +8,7 @@ def render_monitoring_tab(user_data):
     st.header("📊 Monitoramento em Tempo Real")
     st.caption("Acompanhe os lembretes agendados e os follow-ups em andamento.")
 
-    tab1, tab2 = st.tabs(["📅 Lembretes Agendados", "💬 Follow-ups Ativos"])
+    tab1, tab2, tab3 = st.tabs(["📅 Lembretes", "💬 Follow-ups", "🐞 Logs de Erro"])
 
     # --- TAB 1: LEMBRETES ---
     with tab1:
@@ -101,3 +101,56 @@ def render_monitoring_tab(user_data):
 
         except Exception as e:
             st.error(f"Erro ao buscar conversas: {e}")
+
+    # --- TAB 3: ERROR LOGS (NEW) ---
+    with tab3:
+        st.subheader("🐞 Logs de Erro (Sistema)")
+        st.caption(
+            "Visualize erros recentes para debug. Mostrando últimos 50 registros."
+        )
+
+        if st.button("🔄 Atualizar Logs"):
+            st.rerun()
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Tenta criar se não existir (garantia visual)
+                    # Mas o backend já cria.
+                    cur.execute(
+                        """
+                        SELECT id, timestamp, source, error_type, message, traceback, client_id, chat_id, memory_usage, context_data
+                        FROM error_logs
+                        ORDER BY timestamp DESC
+                        LIMIT 50
+                        """
+                    )
+                    error_rows = cur.fetchall()
+
+            if error_rows:
+                for err in error_rows:
+                    ts = err["timestamp"].strftime("%d/%m %H:%M:%S")
+                    label = f"🚨 [{ts}] {err['source']} - {err['error_type']}"
+
+                    with st.expander(label):
+                        st.error(f"**Mensagem:** {err['message']}")
+
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Client ID", err["client_id"] or "N/A")
+                        c2.metric("Chat ID", err["chat_id"] or "N/A")
+                        c3.metric("Memória", err["memory_usage"] or "N/A")
+
+                        st.text_area("Traceback", err["traceback"], height=200)
+
+                        if err["context_data"]:
+                            st.json(err["context_data"])
+            else:
+                st.success("🎉 Nenhum erro registrado recentemente!")
+
+        except Exception as e:
+            if 'relation "error_logs" does not exist' in str(e):
+                st.warning(
+                    "⚠️ Tabela de logs ainda não criada (será criada no primeiro erro)."
+                )
+            else:
+                st.error(f"Erro ao buscar logs: {e}")

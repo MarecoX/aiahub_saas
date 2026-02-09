@@ -708,3 +708,112 @@ def get_inbox_conversations(client_id):
     except Exception as e:
         logger.error(f"❌ Erro ao listar conversas do Inbox: {e}")
         return []
+
+
+# --- ERROR LOGGING SYSTEM ---
+def init_error_log_table():
+    """Cria a tabela de logs de erro se não existir."""
+    if not DB_URL:
+        return
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS error_logs (
+                        id SERIAL PRIMARY KEY,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        source VARCHAR(100),
+                        error_type VARCHAR(100),
+                        message TEXT,
+                        traceback TEXT,
+                        client_id INTEGER,
+                        chat_id VARCHAR(100),
+                        memory_usage VARCHAR(50),
+                        context_data JSONB
+                    );
+                    """
+                )
+    except Exception as e:
+        logger.error(f"❌ Falha ao criar tabela error_logs: {e}")
+
+
+def log_error(
+    source: str,
+    exception: Exception,
+    context: dict = None,
+    client_id: int = None,
+    chat_id: str = None,
+):
+    """
+    Registra um erro no banco de dados para debug posterior.
+    """
+    import traceback
+
+    # Tenta pegar uso de memória
+    mem_usage = "N/A"
+    try:
+        import psutil
+
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        mem_usage = f"{mem_info.rss / 1024 / 1024:.2f} MB"
+    except ImportError:
+        mem_usage = "psutil_missing"
+    except Exception:
+        mem_usage = "error_reading_mem"
+
+    # Prepara dados
+    error_type = type(exception).__name__
+    error_msg = str(exception)
+    tb_str = "".join(
+        traceback.format_exception(None, exception, exception.__traceback__)
+    )
+
+    # Garante que context seja JSON safe
+    import json
+
+    context_json = "{}"
+    if context:
+        try:
+            # Remove objetos não serializáveis (básico)
+            safe_context = {k: str(v) for k, v in context.items()}
+            context_json = json.dumps(safe_context)
+        except:
+            context_json = '{"error": "context_serialization_failed"}'
+
+    try:
+        if not DB_URL:
+            logger.error("DB_URL not set, cannot log error to DB")
+            logger.error(f"Origem: {source} | Erro: {error_msg}")
+            return
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO error_logs (source, error_type, message, traceback, client_id, chat_id, memory_usage, context_data)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        source,
+                        error_type,
+                        error_msg,
+                        tb_str,
+                        client_id,
+                        chat_id,
+                        mem_usage,
+                        context_json,
+                    ),
+                )
+        logger.info(f"🐞 Erro registrado no DB: {error_type} em {source}")
+    except Exception as db_e:
+        logger.error(f"❌ Falha crítica ao salvar log de erro: {db_e}")
+        logger.error(f"Erro Original: {error_msg}")
+
+
+# Initialize table logic on module load (safe chack)
+if not _table_initialized:
+    init_error_log_table()
+    _table_initialized = True

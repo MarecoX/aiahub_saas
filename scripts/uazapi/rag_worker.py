@@ -437,6 +437,25 @@ EXECUTE a ferramenta com os dados fornecidos: `reagir_mensagem(emoji='...', mess
 
     except Exception as e:
         logger.error(f"❌ Erro na Geração IA: {e}", exc_info=True)
+        # --- ERROR LOGGING ---
+        try:
+            from saas_db import log_error
+
+            cid = (
+                client_config.get("id")
+                if "client_config" in locals() and client_config
+                else None
+            )
+            # Contexto extra
+            ctx = {
+                "chat_id": chat_id,
+                "step": "rag_generation",
+                "query": full_query if "full_query" in locals() else "N/A",
+            }
+            log_error("rag_worker.py", e, ctx, client_id=cid, chat_id=chat_id)
+        except Exception as log_err:
+            logger.error(f"Failed to log error to DB: {log_err}")
+        # ---------------------
         raise e
     finally:
         # Garante fechamento da conexão Redis

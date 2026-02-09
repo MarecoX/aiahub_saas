@@ -125,16 +125,57 @@ Envia arquivo de áudio por URL.
 
 **Uso:** Inclua URL de áudio (.mp3, .ogg, .wav) no prompt ou resposta da IA.
 
+### 📚 Base de Conhecimento (RAG)
+Permite que a IA consulte documentos empresariais (PDFs, Manuais) antes de responder.
+
+| Provider | Status |
+|----------|--------|
+| Uazapi | 🟢 Completo |
+| Meta | 🟢 Completo |
+| Lancepilot | 🟢 Completo |
+
+**Configuração:**
+- `rag_active` (bool): Ativa/Desativa a consulta aos documentos.
+- `store_id`: ID do Vector Store (definido no cadastro do cliente).
+
+**Funcionamento:**
+- A tool `consultar_documentos_empresa` é injetada dinamicamente se `rag_active` for `True` e houver um `store_id`.
+- A IA decide sozinha quando consultar os documentos (ex: dúvidas sobre regras, preços, manuais).
+
+---
+
+### 🌐 SGP (Provedores de Internet)
+Integração completa com sistemas de gestão de provedores (SGP).
+
+| Provider | Status |
+|----------|--------|
+| Uazapi | 🟢 Completo |
+| Meta | 🟢 Completo |
+| Lancepilot | 🟢 Completo |
+
+**Funcionalidades:**
+- **Viabilidade Técnica**: Consulta cobertura por CEP/Endereço.
+- **Pré-Cadastro**: Cria cadastro de interessados automaticamente.
+- **Planos**: Consulta planos disponíveis na região.
+
+**Campos configuráveis:**
+- `sgp_url`: URL do sistema SGP.
+- `sgp_token`: Token de API.
+- `sgp_app`: Nome do aplicativo de integração.
+
 ---
 
 ## Arquitetura de Tools
 
 ```
 scripts/shared/tools_library.py
-├── Definição das funções (@tool)
-├── AVAILABLE_TOOLS (registro central)
-├── get_enabled_tools() (monta lista por cliente)
-└── Wrappers de injeção (chat_id, client_id, config)
+├── Definição das ferramentas (@tool)
+├── AVAILABLE_TOOLS (registro central de funções)
+├── get_enabled_tools()
+│   ├── Carrega configs do JSON (client_config)
+│   ├── Injeta dependências (URL, Token, IDs) via Wrappers
+│   └── Injeta RAG dinamicamente (rag_active)
+└── Helper Functions (validadores, formatadores)
 ```
 
 ## Adicionando Nova Tool
