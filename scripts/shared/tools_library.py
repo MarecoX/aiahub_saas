@@ -159,6 +159,7 @@ def consultar_cep(cep: str):
                 "detalhes": components,
                 "lat": location.get("lat"),
                 "lng": location.get("lng"),
+                "system_note": "AÇÃO CONCLUÍDA. NÃO chame esta ferramenta novamente para este CEP. Use os dados retornados.",
             }
             logger.info(f"✅ Retornando para o Agente: {final_payload}")
             return final_payload

@@ -83,6 +83,48 @@ async def run_rag():
 
     # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
     t_cfg = client_config.get("tools_config", {})
+
+    # -------------------------------------------------------------
+    # 🔐 SECURITY CHECKS (Whitelist / Blocklist)
+    # -------------------------------------------------------------
+    sec_lists = t_cfg.get("security_lists", {}) if t_cfg else {}
+    logger.info(f"🔐 Security Config Found: {sec_lists}")
+
+    # Normaliza telefone (remove sufixo @s.whatsapp.net se houver)
+    sender_phone = chat_id.split("@")[0] if "@" in chat_id else chat_id
+
+    # 1. Blocklist (Se estiver na lista, PARE)
+    blocklist = sec_lists.get("blocked_numbers", "")
+    if blocklist:
+        blocked_numbers = [
+            n.strip() for n in blocklist.replace("\n", ",").split(",") if n.strip()
+        ]
+        if sender_phone in blocked_numbers:
+            logger.warning(f"🚫 Sender {sender_phone} is in BLOCKLIST. Aborting.")
+            Kestra.outputs(
+                {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
+            )
+            return
+
+    # 2. Whitelist (Se lista existir E sender NÃO estiver nela, PARE)
+    whitelist = sec_lists.get("allowed_numbers", "")
+    if whitelist:
+        logger.info(
+            f"🛡️ Security Whitelist Check: Sender={sender_phone} | Raw List={repr(whitelist)}"
+        )
+        allowed_numbers = [
+            n.strip() for n in whitelist.replace("\n", ",").split(",") if n.strip()
+        ]
+        logger.info(f"🛡️ Valid Allowed Numbers: {allowed_numbers}")
+
+        if sender_phone not in allowed_numbers:
+            logger.warning(f"🛡️ Sender {sender_phone} NOT in WHITELIST. Aborting.")
+            Kestra.outputs(
+                {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
+            )
+            return
+    # -------------------------------------------------------------
+
     if t_cfg:
         # 1. Desativar IA (Opt-out)
         stop_cfg = t_cfg.get("desativar_ia", {})
@@ -199,33 +241,67 @@ async def run_rag():
         react_cfg = tools_cfg.get("whatsapp_reactions", {})
         react_instructions = react_cfg.get("instructions", "")
 
-        reaction_instruction = f"""
+        if react_cfg.get("active"):
+            reaction_instruction = f"""
 \n🚨 **INSTRUÇÃO CRÍTICA DE INTERFACE (REAÇÕES)** 🚨
 O ID da mensagem do usuário é: '{last_msg_id}'
 """
-        # Se cliente configurou instruções de quando reagir
-        if react_instructions:
-            reaction_instruction += f"""
+            # Se cliente configurou instruções de quando reagir
+            if react_instructions:
+                reaction_instruction += f"""
 📋 **REGRAS DE REAÇÃO DO CLIENTE**:
 {react_instructions}
 """
 
-        reaction_instruction += f"""
+            reaction_instruction += f"""
 COMO REAGIR:
-1. ✅ **OBRIGATÓRIO**: Use a ferramenta `reagir_mensagem(emoji='EMOJI_AQUI', message_id='{last_msg_id}')`.
-2. 🚫 **PROIBIDO**: NÃO coloque o emoji no texto da sua resposta.
-   - ERRADO: "👀 Olá, tudo bem?"
-   - CORRETO: (Chama Tool) + "Olá, tudo bem?"
+1. ⚠️ **OPCIONAL/PREFERENCIAL**: Se apropriado, use `reagir_mensagem(emoji='...', message_id='{last_msg_id}')`.
+2. 🚫 **PROIBIDO**: NÃO coloque o emoji no texto da sua resposta. Use a Tool ou nada.
+3. ⚡ **PRIORIDADE**: Se o usuário pedir explícitamente ("Reaja", "Curta"), USE a ferramenta IMEDIATAMENTE.
 """
-        # Adiciona ao final do prompt existente
-        system_prompt += reaction_instruction
+            # Adiciona ao final do prompt existente
+            system_prompt += reaction_instruction
+
+        # --- LOOP GENÉRICO DE INSTRUÇÕES DE FERRAMENTAS ---
+        # Injeta instruções específicas de cada ferramenta ativa (ex: consultar_cep, agendamento, etc)
+        for tool_name, tool_data in tools_cfg.items():
+            # Pula reactions pois já foi tratado acima com lógica especial
+            if tool_name == "whatsapp_reactions":
+                continue
+
+            if isinstance(tool_data, dict) and tool_data.get("active"):
+                instructions = tool_data.get("instructions")
+                if instructions:
+                    system_prompt += f"""
+\n🔧 **INSTRUÇÕES PARA {tool_name.upper()}**:
+{instructions}
+"""
+
+        # 🛑 ANTI-LOOP (IMPORTANTE) - Condicional (Hubsoft, SGP ou CEP Avulso)
+        hubsoft_active = tools_cfg.get("consultar_viabilidade_hubsoft", {}).get(
+            "active"
+        )
+        sgp_active = tools_cfg.get("sgp_tools", {}).get("active")
+        # CEP é default True, mas verificamos se foi desativado explicitamente
+        cep_config = tools_cfg.get("consultar_cep", {})
+        # Se config existe, respeita o 'active'. Se não existe, assume True (padrão do sistema)
+        cep_active = cep_config.get("active", True)
 
         # INSTRUÇÃO DE PRIORIDADE DE FERRAMENTAS
         system_prompt += f"""
 \n⚡ **PRIORIDADE DE EXECUÇÃO** ⚡
 O parâmetro 'chat_id' é: '{chat_id}'
-Se o usuário pedir uma ação (ex: "Reaja", "Agende"), IGNORE o RAG.
-EXECUTE a ferramenta com os dados fornecidos: `reagir_mensagem(emoji='...', message_id='{last_msg_id}', chat_id='{chat_id}')`.
+Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a ferramenta.
+"""
+
+        # --- REINFORÇO ANTI-LOOP (RECENCY BIAS) ---
+        if hubsoft_active or sgp_active or cep_active:
+            system_prompt += """
+\n🛑 **ANTI-LOOP (IMPORTANTE)** 🛑
+- Se o usuário enviou um CEP, chame `consultar_cep` **UMA ÚNICA VEZ**.
+- **JAMAIS** chame `consultar_cep` duas vezes seguidas para o mesmo CEP.
+- Se já obteve o retorno da ferramenta, **USE essa informação** para responder ao usuário.
+- **NÃO** tente "verificar novamente". Confie no primeiro resultado.
 """
 
     # --- PERSISTÊNCIA DE HISTÓRICO (CRÍTICO PARA FOLLOW-UP) ---
@@ -315,7 +391,7 @@ EXECUTE a ferramenta com os dados fornecidos: `reagir_mensagem(emoji='...', mess
         logger.info(f"🧠 SYSTEM PROMPT (Last 600 chars): ...{system_prompt[-600:]}")
 
         # Chama o Cérebro (OpenAI) passando as Tools (Gemini/Maps)
-        # ask_saas retorna (text, usage, messages)
+        # 4. CHAMA A IA (Multimodal + Tools + RAG)
         response_text, usage_data, history_messages = await ask_saas(
             query=full_query,
             chat_id=chat_id,

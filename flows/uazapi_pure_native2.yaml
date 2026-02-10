@@ -29,7 +29,6 @@ tasks:
       include: [ "**" ]
 
     commands:
-      - rm -f .env
       - export PYTHONPATH=$PYTHONPATH:.
       - python Kestra_2.0/scripts/uazapi/ingest.py
 

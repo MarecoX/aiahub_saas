@@ -129,7 +129,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
         "📋 Lista de Clientes",
         "🔐 Gerenciar Senhas",
         "⚙️ Configurações",
-        "🛠️ Debug & Manutenção",
+        "🚨 Centro de Alertas",
     ]
 )
 
@@ -275,27 +275,16 @@ with tab4:
         st.warning("Cadastre um cliente primeiro.")
 
 with tab5:
-    st.header("🛠️ Utilitários de Debug")
+    st.header("🚨 Centro de Alertas & Debug")
+    st.caption("Visão 360° do sistema: erros, loops, conversas e custos.")
 
-    st.markdown("### 🧹 Limpeza de Memória do Chat")
-    st.info(
-        "Use isso se o chat travar com erro '400 Bad Request' ou 'tool_calls must be followed by tool messages'. Isso apaga o histórico de curto prazo do usuário."
-    )
+    try:
+        from views.admin_debug_tab import render_admin_debug_tab
 
-    chat_id_clean = st.text_input(
-        "Chat ID (Telefone/Session ID)", placeholder="Ex: 5511999999999"
-    )
-
-    if st.button("🗑️ Limpar Histórico do Chat", type="primary"):
-        if chat_id_clean:
-            if clear_chat_history(chat_id_clean):
-                st.success(
-                    f"Histórico de '{chat_id_clean}' limpo com sucesso! Pode testar novamente."
-                )
-            else:
-                st.error("Falha ao limpar histórico. Verifique os logs.")
-        else:
-            st.warning("Digite um Chat ID.")
+        render_admin_debug_tab()
+    except ImportError as e:
+        st.error(f"Erro ao carregar painel de debug: {e}")
+        st.info("Verifique se o arquivo `views/admin_debug_tab.py` existe.")
 
 # Footer
 st.markdown("---")

@@ -212,7 +212,7 @@ async def run_sender():
             if dynamic_key:
                 try:
                     client_cfg = get_client_config(dynamic_key)
-                except:
+                except Exception:
                     pass
 
             cid = client_cfg.get("id") if client_cfg else None

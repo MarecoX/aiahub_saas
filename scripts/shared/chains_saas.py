@@ -258,6 +258,7 @@ def create_saas_agent(system_prompt: str, tools_list: list):
             "1. Call ONE tool.\n"
             "2. Wait for the result.\n"
             "3. Then proceed.\n"
+            "4. 🛑 STOP LOOPING: If you already called a tool and got a result, DO NOT call it again. Use the information you have.\n"
             "NEVER parallelize. ONE BY ONE."
         )
 
@@ -266,15 +267,42 @@ def create_saas_agent(system_prompt: str, tools_list: list):
     # --- CONTEXT TRIMMING (LangChain 1.0 Strict) ---
 
     # Middleware para Trimming (Max 20 mensagens)
+    # Middleware para Trimming (Max 20 mensagens)
     @before_model
     def trim_middleware(state, runtime) -> dict | None:
         messages = state["messages"]
-        # Mantém System + Últimas 20 (aprox. 8k tokens)
-        if len(messages) <= 20:
+
+        # --- LOG DEBUG DE ESTADO ---
+        try:
+            msg_summary = [
+                f"{m.type}:{len(m.content) if m.content else 0}" for m in messages[-5:]
+            ]
+            logger.info(
+                f"🧠 [State Debug] Msgs: {len(messages)} | Last 5: {msg_summary}"
+            )
+
+            # Log se houver ToolMessage recente (Output da ferramenta)
+            last_msg = messages[-1]
+            if last_msg.type == "tool":
+                logger.info(
+                    f"🔧 [State Debug] Última msg foi TOOL OUTPUT: {last_msg.content[:100]}..."
+                )
+            elif last_msg.type == "ai" and last_msg.tool_calls:
+                tool_names = [tc["name"] for tc in last_msg.tool_calls]
+                logger.info(
+                    f"🤖 [State Debug] Última msg foi AI DECISION: {tool_names}"
+                )
+        except Exception:
+            pass
+        # ---------------------------
+
+        # Mantém System + Últimas 50 (aprox. 20k tokens)
+        if len(messages) <= 50:
             return None
 
-        # Limpa tudo e reinserir as ultimas 20
-        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages[-20:]]}
+        # Limpa tudo e reinserir as ultimas 50
+        logger.info(f"✂️ Trimming ativado! Reduzindo de {len(messages)} para 50.")
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages[-50:]]}
 
     logger.info("✂️ Context Trimmer ativado (Middleware LangChain 1.0).")
 
