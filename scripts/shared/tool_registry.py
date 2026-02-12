@@ -231,6 +231,56 @@ TOOL_REGISTRY = {
         "inject_kwarg_name": "hubsoft_config",
         "ui_caption": "Dica: Adicione no prompt da IA instrucoes para sempre perguntar o numero da residencia antes de consultar viabilidade.",
     },
+    # ── HubSoft Consultar Cliente (ISP) ──
+    "consultar_cliente_hubsoft": {
+        "label": "\U0001f50d HubSoft - Consultar Cliente",
+        "category": "isp",
+        "applicable_to": ["isp"],
+        "has_instructions": False,
+        "config_fields": {},
+        "credential_source": "config",
+        "wrapper_type": "inject_config",
+        "inject_kwarg_name": "hubsoft_config",
+        "config_source": "consultar_viabilidade_hubsoft",
+        "ui_help": "Consulta dados cadastrais do cliente por CPF/CNPJ via API HubSoft.",
+        "ui_caption": "Usa as mesmas credenciais da ferramenta HubSoft Viabilidade.",
+    },
+    # ── HubSoft Consultar Financeiro (ISP) ──
+    "consultar_financeiro_hubsoft": {
+        "label": "\U0001f4b0 HubSoft - Consultar Financeiro",
+        "category": "isp",
+        "applicable_to": ["isp"],
+        "has_instructions": False,
+        "config_fields": {},
+        "credential_source": "config",
+        "wrapper_type": "inject_config",
+        "inject_kwarg_name": "hubsoft_config",
+        "config_source": "consultar_viabilidade_hubsoft",
+        "ui_help": "Consulta faturas pendentes do cliente por CPF/CNPJ via API HubSoft.",
+        "ui_caption": "Usa as mesmas credenciais da ferramenta HubSoft Viabilidade.",
+    },
+    # ── HubSoft Desbloqueio de Confianca (ISP) ──
+    "desbloqueio_de_confianca_hubsoft": {
+        "label": "\U0001f513 HubSoft - Desbloqueio de Confianca",
+        "category": "isp",
+        "applicable_to": ["isp"],
+        "has_instructions": False,
+        "config_fields": {
+            "dias_desbloqueio": {
+                "type": "select",
+                "label": "Dias de Desbloqueio",
+                "options": [1, 2, 3, 5, 7, 10, 15, 30],
+                "default": 3,
+                "help": "Quantidade de dias para o desbloqueio de confianca.",
+            },
+        },
+        "credential_source": "config",
+        "wrapper_type": "inject_config",
+        "inject_kwarg_name": "hubsoft_config",
+        "config_source": "consultar_viabilidade_hubsoft",
+        "ui_help": "Realiza desbloqueio de confianca do servico do cliente.",
+        "ui_caption": "Usa as mesmas credenciais da ferramenta HubSoft Viabilidade. O id_cliente_servico e obtido automaticamente pela consulta de cliente.",
+    },
     # ── Cal.com (Agendamento) ──
     "cal_dot_com": {
         "label": "\U0001f4c5 Cal.com (Agendamento)",
