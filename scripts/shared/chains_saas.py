@@ -1,13 +1,17 @@
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from langchain.agents.middleware import before_model
+from langchain.agents.middleware import (
+    before_model,
+    wrap_tool_call,
+)
 from langgraph.checkpoint.postgres import PostgresSaver
-from langchain_core.messages import RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
+from langchain_core.messages import ToolMessage
 from google import genai
 from openai import BadRequestError
 import os
+import json
+import hashlib
 import psycopg
 import logging
 import asyncio
@@ -26,6 +30,34 @@ except ImportError:
 
 
 logger = logging.getLogger("KestraChainsSaaS")
+
+# --- ANTI-LOOP CONSTANTS ---
+MAX_MESSAGES = 50  # Limite de mensagens no historico antes de trimming
+
+
+def _hash_tool_args(args: dict) -> str:
+    """Hash determinístico dos argumentos de uma tool call."""
+    canonical = json.dumps(args, sort_keys=True, default=str)
+    return hashlib.md5(canonical.encode()).hexdigest()
+
+
+def _synthesize_loop_response(tool_name: str, cached_result: str) -> str:
+    """Formata resultado cacheado como resposta legível quando loop é detectado."""
+    if not cached_result:
+        return f"Não consegui processar a ferramenta {tool_name} novamente."
+
+    try:
+        data = json.loads(cached_result)
+        if isinstance(data, dict):
+            if "endereco" in data:
+                return f"Encontrei o endereço: {data['endereco']}"
+            if "viavel" in data:
+                return data.get("mensagem", str(data))
+    except Exception:
+        pass
+
+    return f"Aqui estão os dados solicitados:\n{cached_result}"
+
 
 # Configuração Global
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -246,73 +278,132 @@ def create_knowledge_base_tool(store_id: str):
 
 def create_saas_agent(system_prompt: str, tools_list: list):
     """
-    Cria um Agente OpenAI usando create_agent e PostgresSaver.
+    Cria um Agente OpenAI usando create_agent com middleware anti-loop v4.
+    Retorna (agent, tool_exec_cache).
+
+    Middleware:
+      1. @before_model: Detecta loop (2 tool calls identicas) -> jump_to:end + trimming atomico
+      2. @wrap_tool_call: Cache de execucao - impede re-execucao da mesma tool+args
     """
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, api_key=OPENAI_API_KEY)
 
-    # 🛑 INJECTION: FORÇA EXECUÇÃO SEQUENCIAL (Prevents "Crazy Mode")
     if system_prompt:
         system_prompt += (
-            "\n\n🚨 **SYSTEM RULE: SEQUENTIAL EXECUTION ONLY** 🚨\n"
+            "\n\n## SYSTEM RULE: SEQUENTIAL EXECUTION ONLY\n"
             "You are FORBIDDEN from calling multiple tools at once.\n"
             "1. Call ONE tool.\n"
             "2. Wait for the result.\n"
             "3. Then proceed.\n"
-            "4. 🛑 STOP LOOPING: If you already called a tool and got a result, DO NOT call it again. Use the information you have.\n"
+            "4. STOP LOOPING: If you already called a tool and got a result, "
+            "DO NOT call it again. Use the information you have.\n"
             "NEVER parallelize. ONE BY ONE."
         )
 
     final_tools = list(tools_list) if tools_list else []
 
-    # --- CONTEXT TRIMMING (LangChain 1.0 Strict) ---
+    # Cache compartilhado entre os middlewares e ask_saas
+    _tool_exec_cache = {}
+    _loop_state = {"detected": False, "tool_name": None, "sig": None}
 
-    # Middleware para Trimming (Max 20 mensagens)
-    # Middleware para Trimming (Max 20 mensagens)
-    @before_model
-    def trim_middleware(state, runtime) -> dict | None:
-        messages = state["messages"]
-
-        # --- LOG DEBUG DE ESTADO ---
-        try:
-            msg_summary = [
-                f"{m.type}:{len(m.content) if m.content else 0}" for m in messages[-5:]
-            ]
-            logger.info(
-                f"🧠 [State Debug] Msgs: {len(messages)} | Last 5: {msg_summary}"
-            )
-
-            # Log se houver ToolMessage recente (Output da ferramenta)
-            last_msg = messages[-1]
-            if last_msg.type == "tool":
-                logger.info(
-                    f"🔧 [State Debug] Última msg foi TOOL OUTPUT: {last_msg.content[:100]}..."
-                )
-            elif last_msg.type == "ai" and last_msg.tool_calls:
-                tool_names = [tc["name"] for tc in last_msg.tool_calls]
-                logger.info(
-                    f"🤖 [State Debug] Última msg foi AI DECISION: {tool_names}"
-                )
-        except Exception:
-            pass
-        # ---------------------------
-
-        # Mantém System + Últimas 50 (aprox. 20k tokens)
-        if len(messages) <= 50:
+    # --- MIDDLEWARE 1: Pre-Model Trimming & Loop Guard ---
+    @before_model(can_jump_to=["end"])
+    def pre_model_guard(state, runtime):
+        messages = state.get("messages", [])
+        if not messages:
             return None
 
-        # Limpa tudo e reinserir as ultimas 50
-        logger.info(f"✂️ Trimming ativado! Reduzindo de {len(messages)} para 50.")
-        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages[-50:]]}
+        # --- LOOP DETECTION ---
+        # Conta quantas vezes a MESMA tool+args foi chamada consecutivamente
+        ai_tool_msgs = [
+            m for m in messages
+            if m.type == "ai" and hasattr(m, "tool_calls") and m.tool_calls
+        ]
+        if len(ai_tool_msgs) >= 2:
+            last_ai = ai_tool_msgs[-1]
+            prev_ai = ai_tool_msgs[-2]
+            last_sig = f"{last_ai.tool_calls[0]['name']}:{_hash_tool_args(last_ai.tool_calls[0].get('args', {}))}"
+            prev_sig = f"{prev_ai.tool_calls[0]['name']}:{_hash_tool_args(prev_ai.tool_calls[0].get('args', {}))}"
 
-    logger.info("✂️ Context Trimmer ativado (Middleware LangChain 1.0).")
+            if last_sig == prev_sig:
+                tool_name = last_ai.tool_calls[0]["name"]
+                # Conta repetições consecutivas
+                repeat_count = 0
+                for ai_m in reversed(ai_tool_msgs):
+                    s = f"{ai_m.tool_calls[0]['name']}:{_hash_tool_args(ai_m.tool_calls[0].get('args', {}))}"
+                    if s == last_sig:
+                        repeat_count += 1
+                    else:
+                        break
 
-    return create_agent(
+                if repeat_count >= 3:
+                    # HARD STOP: 3+ chamadas idênticas -> corta e sintetiza
+                    logger.error(f"🚫 HARD STOP: '{tool_name}' {repeat_count}x -> jump_to:end")
+                    if last_sig not in _tool_exec_cache:
+                        for m in reversed(messages):
+                            if m.type == "tool" and m.tool_call_id == prev_ai.tool_calls[0]["id"]:
+                                _tool_exec_cache[last_sig] = m.content
+                                break
+                    _loop_state["detected"] = True
+                    _loop_state["tool_name"] = tool_name
+                    _loop_state["sig"] = last_sig
+                    return {"jump_to": "end"}
+
+                # 2a chamada: log warning mas DEIXA a IA tentar de novo
+                # O @wrap_tool_call vai retornar do cache (sem re-executar)
+                # e a IA terá o resultado de volta para formular resposta
+                logger.warning(f"⚠️ LOOP WARNING: '{tool_name}' {repeat_count}x (cache vai interceptar)")
+
+        # --- ATOMIC TRIMMING ---
+        if len(messages) <= MAX_MESSAGES:
+            return None
+
+        trimmed = messages[-MAX_MESSAGES:]
+        while trimmed and trimmed[0].type == "tool":
+            orphan_id = getattr(trimmed[0], "tool_call_id", None)
+            if not orphan_id:
+                trimmed = trimmed[1:]
+                continue
+            trim_start = len(messages) - len(trimmed)
+            found = False
+            for i in range(trim_start - 1, max(trim_start - 20, -1), -1):
+                msg = messages[i]
+                if msg.type == "ai" and hasattr(msg, "tool_calls") and msg.tool_calls:
+                    if any(tc["id"] == orphan_id for tc in msg.tool_calls):
+                        trimmed = messages[i:]
+                        found = True
+                        break
+            if not found:
+                trimmed = trimmed[1:]
+
+        return {"messages": trimmed}
+
+    # --- MIDDLEWARE 2: Tool Execution Cache ---
+    @wrap_tool_call
+    def tool_cache(request, execute):
+        """Signature: (ToolCallRequest, execute_fn) -> ToolMessage"""
+        tc = request.tool_call
+        sig = f"{tc['name']}:{_hash_tool_args(tc.get('args', {}))}"
+
+        if sig in _tool_exec_cache:
+            logger.info(f"⚡ CACHE HIT: '{tc['name']}' - skip re-execution")
+            return ToolMessage(content=_tool_exec_cache[sig], tool_call_id=tc["id"])
+
+        result = execute(request)
+        result_content = result.content if hasattr(result, "content") else str(result)
+        _tool_exec_cache[sig] = result_content
+        logger.info(f"📦 CACHED: '{tc['name']}'")
+        return result
+
+    logger.info("Anti-Loop Middleware v4 (before_model + wrap_tool_call) ativado.")
+
+    agent = create_agent(
         model=llm,
         tools=final_tools,
         system_prompt=system_prompt,
         checkpointer=get_checkpointer(),
-        middleware=[trim_middleware],
+        middleware=[pre_model_guard, tool_cache],
     )
+    return agent, _tool_exec_cache, _loop_state
 
 
 # --- INTERFACE ---
@@ -365,21 +456,32 @@ async def ask_saas(
     for attempt in range(max_retries):
         try:
             # 1. Cria o Agente (Tools já injetadas dinamicamente via tools_library)
-            agent_runnable = create_saas_agent(system_prompt, tools)
+            agent_runnable, tool_exec_cache, loop_state = create_saas_agent(system_prompt, tools)
 
             # 2. Config de Execução (thread_id inclui client_id para isolar contextos)
             client_id = str(client_config.get("id", "unknown"))
             thread_id = (
                 f"{client_id}:{chat_id}"  # Cada cliente SaaS tem histórico separado
             )
-            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 25}
+            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 15}
 
             # 3. Executa com Proteção
             try:
+                from langgraph.errors import GraphRecursionError
+
                 result = await asyncio.to_thread(
                     agent_runnable.invoke,
                     {"messages": [user_message]},
                     config=config,
+                )
+            except GraphRecursionError:
+                logger.error(
+                    f"🛑 Loop Infinito detectado para {thread_id} (Recursion Limit). Forçando parada."
+                )
+                return (
+                    "Desculpe, entrei num loop tentando processar sua solicitação. Mas a ação provavelmente foi concluída (verifique os logs).",
+                    {"openai": None, "gemini": None},
+                    [],
                 )
             except BadRequestError as e:
                 # AUTO-HEALING: Detecta erro de tool_calls pendentes e limpa
@@ -412,10 +514,29 @@ async def ask_saas(
                         "output_tokens": token_usage.get("completion_tokens", 0),
                     }
 
-            if messages:
-                return messages[-1].content, usage_data, messages
-            else:
+            if not messages:
                 return "Erro: Nenhuma resposta gerada.", usage_data, []
+
+            # --- LOOP SYNTHESIS ---
+            # Se o middleware cortou o loop (jump_to:end), sintetizamos resposta
+            # humana a partir do cache da tool. Sem isso, o JSON cru seria enviado.
+            if loop_state["detected"]:
+                sig = loop_state["sig"]
+                tool_name = loop_state["tool_name"]
+                cached = tool_exec_cache.get(sig, "")
+                if cached:
+                    response_text = _synthesize_loop_response(tool_name, cached)
+                    logger.info(f"✅ Resposta sintetizada do cache para '{tool_name}'")
+                    return response_text, usage_data, messages
+                return "Processado. Como posso ajudar com mais alguma coisa?", usage_data, messages
+
+            # --- NORMAL RESPONSE ---
+            # Busca última mensagem AI com texto (a resposta real da IA)
+            for m in reversed(messages):
+                if m.type == "ai" and m.content:
+                    return m.content, usage_data, messages
+
+            return "Processado. Como posso ajudar?", usage_data, messages
 
         except psycopg.OperationalError as e:
             # CONEXÃO STALE - Reconecta e tenta novamente

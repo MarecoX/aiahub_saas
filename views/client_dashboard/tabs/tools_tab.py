@@ -1,5 +1,14 @@
+"""
+tools_tab.py - UI de Ferramentas e Integracoes (Auto-gerada do TOOL_REGISTRY)
+
+Este modulo renderiza a aba de "Ferramentas" no dashboard do cliente.
+A UI e gerada dinamicamente a partir do TOOL_REGISTRY, eliminando codigo duplicado.
+Secoes especiais (LancePilot, WhatsApp Avancado, Seguranca, Debug) permanecem manuais.
+"""
+
 import os
 import sys
+import json
 import streamlit as st
 
 # Ensure root dir is in path for imports
@@ -12,78 +21,216 @@ from scripts.shared.saas_db import (  # noqa: E402
     get_connection,
     get_provider_config,
     upsert_provider_config,
-)  # noqa: E402
+)
+from scripts.shared.tool_registry import TOOL_REGISTRY, get_tools_for_business_type  # noqa: E402
+
+# Backward compat: Map de keys antigas -> keys novas
+_KEY_ALIASES = {
+    "consultar_erp": "consultar_produtos_betel",  # UI antiga salvava com esse nome
+}
 
 
-def render_tools_tab(user_data):
-    st.header("Ferramentas e Integrações")
-    st.info("Conecte seu assistente a sistemas externos.")
+# ─── Generic Field Renderer ───────────────────────────────────────────────
 
-    # Load Config
-    t_config = user_data.get("tools_config", {})
-    if not t_config:
-        t_config = {}
 
-    # --- Base de Conhecimento (RAG) ---
-    st.subheader("📚 Base de Conhecimento (RAG)")
-    rag_active_val = t_config.get("rag_active", True)  # Default True
+def _render_config_fields(
+    tool_name: str, config_fields: dict, current_cfg: dict
+) -> dict:
+    """
+    Renderiza campos de configuracao baseado nos metadados do registry.
+    Retorna dict com os valores preenchidos pelo usuario.
 
-    c_rag_active = st.toggle(
-        "Ativar Base de Conhecimento",
-        value=rag_active_val,
-        help="Se ativado, a IA consultará seus documentos (manuais, PDFs) antes de responder. Se desativado, usará apenas ferramentas e conhecimento geral.",
+    Suporta tipos: text, password, textarea, number, select, toggle
+    """
+    values = {}
+    field_items = list(config_fields.items())
+
+    # Agrupa campos em colunas de 2 (exceto textarea/toggle que ocupa linha inteira)
+    i = 0
+    while i < len(field_items):
+        field_name, field_meta = field_items[i]
+        ftype = field_meta.get("type", "text")
+        wkey = f"{tool_name}_{field_name}"  # Unique Streamlit widget key
+
+        if ftype in ("textarea",):
+            values[field_name] = st.text_area(
+                field_meta.get("label", field_name),
+                value=current_cfg.get(field_name, ""),
+                height=field_meta.get("height", 80),
+                placeholder=field_meta.get("placeholder", ""),
+                help=field_meta.get("help", None),
+                key=wkey,
+            )
+            i += 1
+
+        elif ftype == "toggle":
+            values[field_name] = st.toggle(
+                field_meta.get("label", field_name),
+                value=current_cfg.get(field_name, field_meta.get("default", False)),
+                help=field_meta.get("help", None),
+                key=wkey,
+            )
+            i += 1
+
+        elif ftype == "select":
+            options = field_meta.get("options", [])
+            current_val = current_cfg.get(
+                field_name, field_meta.get("default", options[0] if options else "")
+            )
+            idx = options.index(current_val) if current_val in options else 0
+            values[field_name] = st.selectbox(
+                field_meta.get("label", field_name),
+                options=options,
+                index=idx,
+                help=field_meta.get("help", None),
+                key=wkey,
+            )
+            i += 1
+
+        elif ftype == "number":
+            values[field_name] = st.number_input(
+                field_meta.get("label", field_name),
+                min_value=field_meta.get("min", 0),
+                max_value=field_meta.get("max", 9999),
+                value=int(current_cfg.get(field_name, field_meta.get("default", 0))),
+                help=field_meta.get("help", None),
+                key=wkey,
+            )
+            i += 1
+
+        else:
+            # text or password: try to pair with next field for 2-column layout
+            if i + 1 < len(field_items) and field_items[i + 1][1].get(
+                "type", "text"
+            ) in ("text", "password"):
+                next_name, next_meta = field_items[i + 1]
+                next_key = f"{tool_name}_{next_name}"
+                col1, col2 = st.columns(2)
+                with col1:
+                    values[field_name] = st.text_input(
+                        field_meta.get("label", field_name),
+                        value=current_cfg.get(field_name, ""),
+                        type="password" if ftype == "password" else "default",
+                        help=field_meta.get("help", None),
+                        placeholder=field_meta.get("placeholder", ""),
+                        key=wkey,
+                    )
+                with col2:
+                    ntype = next_meta.get("type", "text")
+                    values[next_name] = st.text_input(
+                        next_meta.get("label", next_name),
+                        value=current_cfg.get(next_name, ""),
+                        type="password" if ntype == "password" else "default",
+                        help=next_meta.get("help", None),
+                        placeholder=next_meta.get("placeholder", ""),
+                        key=next_key,
+                    )
+                i += 2
+            else:
+                values[field_name] = st.text_input(
+                    field_meta.get("label", field_name),
+                    value=current_cfg.get(field_name, ""),
+                    type="password" if ftype == "password" else "default",
+                    help=field_meta.get("help", None),
+                    placeholder=field_meta.get("placeholder", ""),
+                    key=wkey,
+                )
+                i += 1
+
+    return values
+
+
+def _render_tool_section(tool_name: str, meta: dict, t_config: dict) -> tuple:
+    """
+    Renderiza uma secao de tool completa (header, toggle, campos, instrucoes).
+    Retorna (is_active, config_dict) para salvar depois.
+    """
+    # Load existing config (com backward compat para keys antigas)
+    current_cfg = t_config.get(tool_name, {})
+    if not current_cfg and tool_name in _KEY_ALIASES:
+        current_cfg = t_config.get(_KEY_ALIASES[tool_name], {})
+    if isinstance(current_cfg, bool):
+        current_cfg = {"active": current_cfg}
+
+    # Special: RAG has default=True
+    default_active = meta.get("default_active", False)
+
+    # Header
+    st.subheader(meta["label"])
+
+    # Provider badge
+    badge = meta.get("provider_badge")
+    if badge:
+        st.caption(badge)
+
+    # Toggle
+    is_active = st.toggle(
+        f"Ativar {meta['label']}",
+        value=current_cfg.get("active", default_active),
+        help=meta.get("ui_help", None),
+        key=f"toggle_{tool_name}",
     )
 
-    if c_rag_active:
-        st.info("🟢 RAG Ativado: A IA tem acesso aos seus documentos empresariais.")
+    # Config fields + instructions (shown only when active)
+    field_values = {}
+    instructions_value = ""
+
+    if is_active:
+        # Active info
+        active_info = meta.get("ui_active_info")
+        if active_info:
+            st.info(active_info)
+
+        # Config fields
+        if meta.get("config_fields"):
+            field_values = _render_config_fields(
+                tool_name, meta["config_fields"], current_cfg
+            )
+
+        # Instructions field
+        if meta.get("has_instructions"):
+            instructions_label = meta.get("instructions_label", "Instrucoes para a IA")
+            instructions_value = st.text_area(
+                instructions_label,
+                value=current_cfg.get("instructions", ""),
+                height=100,
+                placeholder=meta.get("instructions_placeholder", ""),
+                help="Essas instrucoes serao adicionadas ao prompt da IA.",
+                key=f"instructions_{tool_name}",
+            )
+
+        # Caption
+        caption = meta.get("ui_caption")
+        if caption:
+            st.caption(caption)
     else:
-        st.warning("🔴 RAG Desativado: A IA NÃO consultará seus documentos.")
+        # When inactive, use empty/default values
+        for field_name, field_meta in meta.get("config_fields", {}).items():
+            ftype = field_meta.get("type", "text")
+            if ftype == "toggle":
+                field_values[field_name] = field_meta.get("default", False)
+            elif ftype == "number":
+                field_values[field_name] = field_meta.get("default", 0)
+            elif ftype == "select":
+                field_values[field_name] = field_meta.get("default", "")
+            else:
+                field_values[field_name] = ""
 
-    st.divider()
+    # Build save dict
+    save_dict = {"active": is_active, **field_values}
+    if meta.get("has_instructions"):
+        save_dict["instructions"] = instructions_value if is_active else ""
 
-    # --- Kommo CRM ---
-    st.subheader("Kommo CRM")
-    kommo_cfg = t_config.get("qualificado_kommo_provedor", {})
-    if isinstance(kommo_cfg, bool):
-        kommo_cfg = {"active": kommo_cfg}
+    return is_active, save_dict
 
-    c_kommo_active = st.toggle(
-        "Ativar Integração Kommo CRM", value=kommo_cfg.get("active", False)
-    )
 
-    if c_kommo_active:
-        k1, k2 = st.columns(2)
-        k_url = k1.text_input(
-            "URL Base (ex: https://dominio.kommo.com)",
-            value=kommo_cfg.get("url", ""),
-        )
-        k_token = k2.text_input(
-            "Token de Autorização (Bearer ...)",
-            value=kommo_cfg.get("token", ""),
-            type="password",
-        )
+# ─── Special Sections (not in registry) ───────────────────────────────────
 
-        k3, k4 = st.columns(2)
-        k_pipeline = k3.text_input(
-            "Pipeline ID (Opcional)", value=str(kommo_cfg.get("pipeline_id", ""))
-        )
-        k_status = k4.text_input(
-            "Status ID (Lead Qualificado)",
-            value=str(kommo_cfg.get("status_id", "")),
-        )
 
-        st.caption(
-            "Ao preencher o Status ID, o assistente moverá o card automaticamente quando qualificado."
-        )
-    else:
-        k_url, k_token, k_pipeline, k_status = "", "", "", ""
-
-    st.divider()
-
-    # --- LancePilot ---
+def _render_lancepilot_section(user_data: dict):
+    """Renderiza secao LancePilot (provider especial, nao e tool do registry)."""
     st.subheader("LancePilot (WhatsApp Oficial)")
 
-    # Buscar de client_providers (novo) com fallback para colunas (legado)
     lp_cfg = get_provider_config(str(user_data["id"]), "lancepilot") or {}
     if not lp_cfg:
         lp_cfg = {
@@ -94,7 +241,7 @@ def render_tools_tab(user_data):
         }
 
     c_lp_active = st.toggle(
-        "Ativar Integração LancePilot",
+        "Ativar Integracao LancePilot",
         value=lp_cfg.get("active", False),
     )
 
@@ -106,37 +253,30 @@ def render_tools_tab(user_data):
         lp_token = st.text_input(
             "Token LancePilot (API v3)", value=lp_token, type="password"
         )
-
         lp_number = st.text_input(
-            "Número Conectado (Ex: 5561999999999)",
+            "Numero Conectado (Ex: 5561999999999)",
             value=lp_number,
-            help="Este número será usado para identificar a origem das mensagens se o Webhook não tiver token.",
+            help="Este numero sera usado para identificar a origem das mensagens se o Webhook nao tiver token.",
         )
 
-        # Privacy: Search Term Required
         lp_search = st.text_input(
-            "Nome do Workspace (Filtro Obrigatório)",
+            "Nome do Workspace (Filtro Obrigatorio)",
             help="Digite o nome exato para buscar seu workspace.",
         )
 
-        # Fetch Workspaces Button
         if lp_token:
-            if st.button("🔄 Carregar Workspaces"):
+            if st.button("Carregar Workspaces"):
                 if not lp_search:
-                    st.warning("⚠️ Digite o nome do Workspace para buscar.")
+                    st.warning("Digite o nome do Workspace para buscar.")
                 else:
                     try:
-                        # Lazy import to avoid circular dependency
                         try:
                             from scripts.lancepilot.client import LancePilotClient
                         except ImportError:
-                            import sys
-
                             sys.path.append(root_dir)
                             from scripts.lancepilot.client import LancePilotClient
 
                         client = LancePilotClient(token=lp_token)
-                        # Pass search term!
                         data = client.get_workspaces(search_query=lp_search)
                         st.session_state[f"lp_workspaces_{user_data['id']}"] = data
                         if data:
@@ -146,15 +286,12 @@ def render_tools_tab(user_data):
                     except Exception as e:
                         st.error(f"Erro ao buscar workspaces: {e}")
 
-        # Dropdown for Workspace
         saved_ws_list = st.session_state.get(f"lp_workspaces_{user_data['id']}", [])
 
         if saved_ws_list:
             ws_options = {
                 w["id"]: f"{w['attributes']['name']} ({w['id']})" for w in saved_ws_list
             }
-
-            # Default index
             def_idx = 0
             keys = list(ws_options.keys())
             if lp_workspace_id in keys:
@@ -175,422 +312,138 @@ def render_tools_tab(user_data):
             )
 
         if c_lp_active:
-            st.markdown("#### 🔗 Webhook de Integração")
+            st.markdown("#### Webhook de Integracao")
             st.info(
                 "Copie a URL abaixo e configure no LancePilot (Settings > Webhook):"
             )
 
-            # Tenta adivinhar a URL base (ou usa placeholder)
             base_kestra = user_data.get("api_url") or "https://SEU-KESTRA-URL.com"
             if "/api" in base_kestra:
                 base_kestra = base_kestra.split("/api")[0]
 
-            # URL do Webhook do Flow 'lancepilot_native'
             webhook_url = f"{base_kestra}/api/v1/executions/webhook/company.team/lancepilot_native/lp_webhook"
-
             st.code(webhook_url, language="text")
             st.caption(
-                f"Token do Cliente: {user_data.get('token')} | Identificação via Número: {lp_number}"
+                f"Token do Cliente: {user_data.get('token')} | Identificacao via Numero: {lp_number}"
             )
 
-    st.divider()
+    return c_lp_active, lp_token, lp_workspace_id, lp_number
 
-    # --- Betel ERP ---
-    st.subheader("Betel ERP (Consulta de Produtos)")
-    betel_cfg = t_config.get("consultar_produtos_betel", {})
-    if isinstance(betel_cfg, bool):
-        betel_cfg = {"active": betel_cfg}
 
-    c_betel_active = st.toggle(
-        "Ativar Integração Betel ERP", value=betel_cfg.get("active", False)
-    )
+def _render_whatsapp_advanced_section(t_config: dict, user_data: dict):
+    """Renderiza secao WhatsApp Avancado (Reactions, Humanizado, Seguranca)."""
+    st.header("WhatsApp Avancado")
+    st.caption("Configure comportamento, reacoes e seguranca do seu numero.")
 
-    b_loja = betel_cfg.get("loja_id", "")
-    b_access = betel_cfg.get("access_token", "")
-    b_secret = betel_cfg.get("secret_token", "")
+    # Reactions is in the registry but rendered in a special section
+    react_cfg = t_config.get("whatsapp_reactions", {})
+    if isinstance(react_cfg, bool):
+        react_cfg = {"active": react_cfg}
 
-    if c_betel_active:
-        b_loja = st.text_input("ID da Loja", value=b_loja)
-        b1, b2 = st.columns(2)
-        b_access = b1.text_input("Access Token", value=b_access, type="password")
-        b_secret = b2.text_input("Secret Token", value=b_secret, type="password")
-
-    st.divider()
-
-    # --- Consulta CEP ---
-    st.subheader("📍 Consulta CEP (Correios/ViaCEP)")
-    cep_cfg = t_config.get("consultar_cep", {})
-    if isinstance(cep_cfg, bool):
-        cep_cfg = {"active": cep_cfg}
-
-    c_cep_active = st.toggle(
-        "Ativar Consulta de CEP",
-        value=cep_cfg.get("active", False),
-        help="Permite que a IA consulte endereços automaticamente a partir do CEP informado pelo cliente.",
-    )
-
-    if c_cep_active:
-        st.caption(
-            "Esta integração utiliza serviços públicos (ViaCEP/BrasilAPI). Nenhuma configuração extra é necessária."
-        )
-
-    st.divider()
-    st.subheader("📤 Enviar Relatório para Grupo")
-    relatorio_cfg = t_config.get("enviar_relatorio", {})
-    if isinstance(relatorio_cfg, bool):
-        relatorio_cfg = {"active": relatorio_cfg}
-
-    c_relatorio_active = st.toggle(
-        "Habilitar Envio de Relatórios", value=relatorio_cfg.get("active", False)
-    )
-
-    r_grupo = relatorio_cfg.get("grupo_id", "")
-    r_instructions = relatorio_cfg.get("instructions", "")
-    r_template = relatorio_cfg.get("template", "")
-
-    if c_relatorio_active:
-        r_grupo = st.text_input(
-            "ID do Grupo WhatsApp",
-            value=r_grupo,
-            help="Ex: 5511999999999-1234567890@g.us (obtenha via Uazapi)",
-        )
-        r_instructions = st.text_area(
-            "Quando enviar relatório?",
-            value=r_instructions,
-            height=100,
-            placeholder="Ex: Envie relatório quando o cliente confirmar pedido, reservar produto, ou fechar negócio...",
-        )
-        r_template = st.text_area(
-            "Template da Mensagem (Opcional)",
-            value=r_template,
-            height=80,
-            placeholder="Ex: *Novo Pedido* \\n Telefone: {{telefone}} \\n Resumo: {{resumo_da_solicitacao}}",
-            help="Use {{campo}} para inserir dados. **{{telefone}}** ou **{{numero_do_cliente}}** é preenchido automaticamente com o número do WhatsApp. Mínimo: 2 campos.",
-        )
-
-    st.divider()
-
-    # --- Atendimento Humano ---
-    st.subheader("🧑‍💼 Atendimento Humano")
-    st.caption("🟢 Uazapi | 🟢 Meta | 🟢 Lancepilot")
-    handoff_cfg = t_config.get("atendimento_humano", {})
-    if isinstance(handoff_cfg, bool):
-        handoff_cfg = {"active": handoff_cfg}
-
-    c_handoff_active = st.toggle(
-        "Habilitar Atendimento Humano", value=handoff_cfg.get("active", False)
-    )
-
-    h_timeout = handoff_cfg.get("timeout_minutes", 60)
-    h_instructions = handoff_cfg.get("instructions", "")
-
-    if c_handoff_active:
-        h_timeout = st.number_input(
-            "Duração do Modo Humano (minutos)",
-            min_value=5,
-            max_value=1440,
-            value=int(h_timeout),
-            help="Tempo que a IA ficará pausada após transferir para humano.",
-        )
-        h_instructions = st.text_area(
-            "Quando ativar o Atendimento Humano?",
-            value=h_instructions,
-            height=120,
-            placeholder="Ex: Transfira para humano quando o cliente pedir entrega, solicitar desconto, ou perguntar sobre garantia...",
-            help="Essas instruções serão adicionadas ao prompt da IA.",
-        )
-
-    st.divider()
-
-    # --- Desativar IA (Opt-out) ---
-    st.subheader("🛑 Desativar IA (Opt-out)")
-    st.caption("🟢 Uazapi | 🟡 Meta (parcial) | 🟡 Lancepilot (parcial)")
-    stop_cfg = t_config.get("desativar_ia", {})
-    if isinstance(stop_cfg, bool):
-        stop_cfg = {"active": stop_cfg}
-
-    c_stop_active = st.toggle(
-        "Habilitar Desativação Permanente",
-        value=stop_cfg.get("active", False),
-        help="Permite que o cliente pare a IA definitivamente com um comando ou emoji.",
-    )
-
-    s_instructions = stop_cfg.get("instructions", "")
-
-    if c_stop_active:
-        s_instructions = st.text_area(
-            "Gatilhos de Parada (Emojis ou Frases)",
-            value=s_instructions,
-            height=100,
-            placeholder="Ex: Se o cliente enviar 🛑, PARE ou STOP, desative a IA permanentemente.",
-            help="Defina aqui quais intenções ou símbolos devem matar o bot.",
-        )
-
-    st.divider()
-
-    # --- Criar Lembrete ---
-    st.subheader("📅 Criar Lembrete (Follow-up Agendado)")
-    st.caption("🟢 Uazapi | 🟡 Meta (via Template) | 🟡 Lancepilot (via Template)")
-    reminder_cfg = t_config.get("criar_lembrete", {})
-    if isinstance(reminder_cfg, bool):
-        reminder_cfg = {"active": reminder_cfg}
-
-    c_reminder_active = st.toggle(
-        "Habilitar Lembretes Agendados",
-        value=reminder_cfg.get("active", False),
-        help="Permite que a IA agende lembretes para retornar contato com o cliente (ex: 'me ligue semana que vem').",
-    )
-
-    if c_reminder_active:
-        st.info(
-            "A IA entenderá frases como: 'amanhã', 'semana que vem', 'em 3 dias', 'dia 15'."
-        )
-
-    st.divider()
-
-    # --- HubSoft Viabilidade ---
-    st.subheader("🌐 HubSoft - Consulta de Viabilidade")
-    hubsoft_cfg = t_config.get("consultar_viabilidade_hubsoft", {})
-    if isinstance(hubsoft_cfg, bool):
-        hubsoft_cfg = {"active": hubsoft_cfg}
-
-    c_hubsoft_active = st.toggle(
-        "Ativar Consulta de Viabilidade HubSoft",
-        value=hubsoft_cfg.get("active", False),
-        help="Permite que a IA consulte automaticamente se há cobertura de internet no endereço do cliente.",
-    )
-
-    hs_api_url = hubsoft_cfg.get("api_url", "")
-    hs_client_id = hubsoft_cfg.get("client_id", "")
-    hs_client_secret = hubsoft_cfg.get("client_secret", "")
-    hs_username = hubsoft_cfg.get("username", "")
-    hs_password = hubsoft_cfg.get("password", "")
-
-    if c_hubsoft_active:
-        hs_api_url = st.text_input(
-            "URL da API HubSoft",
-            value=hs_api_url,
-            placeholder="https://api.seuprovedor.hubsoft.com.br",
-            help="URL base da API do seu provedor no HubSoft.",
-        )
-        hs1, hs2 = st.columns(2)
-        hs_client_id = hs1.text_input("Client ID", value=hs_client_id)
-        hs_client_secret = hs2.text_input(
-            "Client Secret", value=hs_client_secret, type="password"
-        )
-
-        hs3, hs4 = st.columns(2)
-        hs_username = hs3.text_input("Username (E-mail)", value=hs_username)
-        hs_password = hs4.text_input("Password", value=hs_password, type="password")
-
-        # Opções Adicionais
-        hs5, hs6 = st.columns(2)
-        hs_raio = hs5.selectbox(
-            "Raio de Busca (metros)",
-            options=[250, 500, 750, 1000, 1250, 1500],
-            index=[250, 500, 750, 1000, 1250, 1500].index(hubsoft_cfg.get("raio", 250))
-            if hubsoft_cfg.get("raio", 250) in [250, 500, 750, 1000, 1250, 1500]
-            else 0,
-            help="Distância máxima para buscar pontos de cobertura.",
-        )
-        hs_detalhar_portas = hs6.toggle(
-            "Detalhar Portas",
-            value=hubsoft_cfg.get("detalhar_portas", False),
-            help="Se ativado, retorna detalhes das portas disponíveis/ocupadas.",
-        )
-
-        st.caption(
-            "📌 Dica: Adicione no prompt da IA instruções para sempre perguntar o número da residência antes de consultar viabilidade."
-        )
-        hs_raio = 250
-        hs_detalhar_portas = False
-
-    st.divider()
-
-    # --- Cal.com (Agendamento) ---
-    st.subheader("📅 Cal.com (Agendamento)")
-    cal_cfg = t_config.get("cal_dot_com", {})
-    if isinstance(cal_cfg, bool):
-        cal_cfg = {"active": cal_cfg}
-
-    c_cal_active = st.toggle(
-        "Ativar Integração Cal.com",
-        value=cal_cfg.get("active", False),
-        help="Permite que a IA consulte horários e agende reuniões automaticamente.",
-    )
-
-    cal_api_key = cal_cfg.get("api_key", "")
-    cal_event_id = cal_cfg.get("event_type_id", "")
-
-    if c_cal_active:
-        cal_api_key = st.text_input(
-            "API Key (v2)",
-            value=cal_api_key,
-            type="password",
-            help="Chave de API do Cal.com (Configurações > API Keys).",
-        )
-        cal_event_id = st.text_input(
-            "Event Type ID",
-            value=cal_event_id,
-            help="ID do tipo de evento a ser agendado (ex: 12345). Encontre na URL do evento.",
-        )
-        st.caption("A IA poderá: Consultar Agenda, Agendar, Remarcar e Cancelar.")
-    else:
-        cal_api_key = ""
-        cal_event_id = ""
-
-    st.divider()
-
-    # ==========================================
-    # 📱 WHATSAPP AVANÇADO (Configurações Gerais)
-    # ==========================================
-    st.header("📱 WhatsApp Avançado")
-    st.caption("Configure comportamento, reações e segurança do seu número.")
-
-    # 1. Reações (Emojis)
-    with st.expander("👍 Reações e Interatividade", expanded=True):
-        react_cfg = t_config.get("whatsapp_reactions", {})
-        if isinstance(react_cfg, bool):
-            react_cfg = {"active": react_cfg}
-
+    with st.expander("Reacoes e Interatividade", expanded=True):
         c_react_active = st.toggle(
-            "Ativar Reações (Emojis)",
+            "Ativar Reacoes (Emojis)",
             value=react_cfg.get("active", False),
-            help="Permite que a IA reaja às mensagens do cliente com emojis (👍, ❤️, 😂).",
+            help="Permite que a IA reaja as mensagens do cliente com emojis.",
         )
-
         react_instructions = react_cfg.get("instructions", "")
-
         if c_react_active:
             react_instructions = st.text_area(
                 "Quando reagir?",
                 value=react_instructions,
                 height=80,
-                placeholder="Ex: Reaja com 👀 em toda mensagem nova. Use 👍 quando cliente confirmar algo.",
+                placeholder="Ex: Reaja com emojis em toda mensagem nova. Use positivo quando cliente confirmar algo.",
                 help="Instrua a IA sobre quando e qual emoji usar.",
             )
 
-    # 2. Modo Humanizado (Split)
-    with st.expander("💬 Modo Humanizado (Estilo de Escrita)", expanded=True):
-        # Load WhatsApp specific config
-        wa_config = t_config.get("whatsapp", {})
-        # Backwards compatibility check
-        if t_config.get("split_by_paragraph"):
-            wa_config["split_by_paragraph"] = True
+    # Modo Humanizado
+    wa_config = t_config.get("whatsapp", {})
+    if t_config.get("split_by_paragraph"):
+        wa_config["split_by_paragraph"] = True
 
+    with st.expander("Modo Humanizado (Estilo de Escrita)", expanded=True):
         c_split_active = st.toggle(
-            "Picotar Mensagens (Dividir em parágrafos)",
+            "Picotar Mensagens (Dividir em paragrafos)",
             value=wa_config.get("split_by_paragraph", False),
-            help="Se ativado, envia várias mensagens curtas. Se desativado, envia blocos maiores.",
+            help="Se ativado, envia varias mensagens curtas. Se desativado, envia blocos maiores.",
         )
-
         if c_split_active:
-            st.caption("✅ Ativado: Quebra parágrafos (somente quando tiver `\\n\\n`).")
+            st.caption(
+                "Ativado: Quebra paragrafos (somente quando tiver quebra dupla)."
+            )
         else:
             st.caption(
-                "ℹ️ Desativado: Agrupa o texto (Listas e `\\n` simples continuam juntos)."
+                "Desativado: Agrupa o texto (Listas e quebras simples continuam juntos)."
             )
 
-    # 3. Segurança (Listas)
-    with st.expander("🛡️ Segurança e Controle (Whitelist/Blocklist)", expanded=False):
-        security_cfg = t_config.get("security_lists", {})
-
+    # Seguranca
+    security_cfg = t_config.get("security_lists", {})
+    with st.expander("Seguranca e Controle (Whitelist/Blocklist)", expanded=False):
         col_sec1, col_sec2 = st.columns(2)
-
         with col_sec1:
             s_whitelist = st.text_area(
-                "✅ Permitir APENAS estes (Whitelist)",
+                "Permitir APENAS estes (Whitelist)",
                 value=security_cfg.get("allowed_numbers", ""),
                 placeholder="Ex: 5511999999999",
-                help="Se tiver números aqui, o robô IGNORA todo o resto.",
+                help="Se tiver numeros aqui, o robo IGNORA todo o resto.",
                 height=100,
             )
-
         with col_sec2:
             s_blocklist = st.text_area(
-                "🚫 Bloquear estes (Blocklist)",
+                "Bloquear estes (Blocklist)",
                 value=security_cfg.get("blocked_numbers", ""),
                 placeholder="Ex: 5511777777777",
-                help="Estes números nunca serão atendidos.",
+                help="Estes numeros nunca serao atendidos.",
                 height=100,
             )
 
-    st.divider()
+    return {
+        "whatsapp_reactions": {
+            "active": c_react_active,
+            "instructions": react_instructions if c_react_active else "",
+        },
+        "whatsapp": {"split_by_paragraph": c_split_active},
+        "security_lists": {
+            "allowed_numbers": s_whitelist,
+            "blocked_numbers": s_blocklist,
+        },
+    }
 
-    # --- SGP (Integração ISP) ---
-    st.subheader("🌐 SGP - Integração ISP")
-    sgp_cfg = t_config.get("sgp_tools", {})
-    if isinstance(sgp_cfg, bool):
-        sgp_cfg = {"active": sgp_cfg}
 
-    c_sgp_active = st.toggle(
-        "Ativar Integração SGP",
-        value=sgp_cfg.get("active", False),
-        help="Permite consultar viabilidade e realizar pré-cadastro no sistema SGP.",
-    )
-
-    sgp_url = sgp_cfg.get("sgp_url", "")
-    sgp_token = sgp_cfg.get("sgp_token", "")
-    sgp_app = sgp_cfg.get("sgp_app", "")
-
-    if c_sgp_active:
-        sgp_url = st.text_input(
-            "URL do SGP",
-            value=sgp_url,
-            placeholder="https://sgp.net.br",
-        )
-        sgp_app = st.text_input(
-            "SGP App Name",
-            value=sgp_app,
-            placeholder="Ex: meu_app_integracao",
-        )
-        sgp_token = st.text_input(
-            "Token de Acesso",
-            value=sgp_token,
-            type="password",
-        )
-        st.caption("A IA poderá: Consultar Viabilidade e Realizar Pré-Cadastro.")
-
-    st.divider()
-
-    # --- DEBUG / TESTES MANUAIS ---
-    with st.expander("🔧 Ferramentas de Debug / Teste Manual", expanded=False):
-        st.write("**Teste de Reação (Uazapi)**")
+def _render_debug_section(user_data: dict):
+    """Renderiza secao de debug/teste manual."""
+    with st.expander("Ferramentas de Debug / Teste Manual", expanded=False):
+        st.write("**Teste de Reacao (Uazapi)**")
         t_chat_id = st.text_input(
             "Chat ID / Remote JID", placeholder="5511999999999@s.whatsapp.net"
         )
         t_msg_id = st.text_input("Message ID", placeholder="3EB0...")
-        t_emoji = st.text_input("Emoji", placeholder="👍")
+        t_emoji = st.text_input("Emoji", placeholder="")
 
-        if st.button("Enviar Reação Manual"):
+        if st.button("Enviar Reacao Manual"):
             if not t_chat_id or not t_msg_id:
                 st.error("Preencha Chat ID e Message ID.")
             else:
                 try:
                     import asyncio
 
-                    # Import dinâmico para garantir path
                     try:
                         from scripts.uazapi.uazapi_saas import send_whatsapp_reaction
                     except ImportError:
                         sys.path.append(os.path.join(root_dir, "scripts", "uazapi"))
                         from uazapi_saas import send_whatsapp_reaction
 
-                    # Tenta pegar token do cliente atual
                     api_key = None
                     api_url = None
-
                     prov = get_provider_config(str(user_data["id"]), "uazapi")
                     if prov:
                         api_key = prov.get("token") or prov.get("key")
                         api_url = prov.get("url")
-
                     if not api_key:
                         api_key = user_data.get("token")
                         api_url = user_data.get("api_url")
 
                     st.info(f"Usando URL: {api_url} | Token: ...{str(api_key)[-4:]}")
-
                     res = asyncio.run(
                         send_whatsapp_reaction(
                             number=t_chat_id,
@@ -601,107 +454,106 @@ def render_tools_tab(user_data):
                         )
                     )
                     st.success(f"Resultado: {res}")
-
                 except Exception as e:
                     st.error(f"Erro ao enviar: {e}")
 
-    if st.button("💾 Salvar Integrações"):
+
+# ─── Render Order: defines which registry tools appear in which order ──────
+
+# Tools rendered via registry (in display order)
+REGISTRY_TOOL_ORDER = [
+    "rag_active",
+    "qualificado_kommo_provedor",
+    "consultar_erp",
+    "consultar_cep",
+    "enviar_relatorio",
+    "atendimento_humano",
+    "desativar_ia",
+    "criar_lembrete",
+    "consultar_viabilidade_hubsoft",
+    "cal_dot_com",
+    "sgp_tools",
+    # whatsapp_reactions is rendered in the WhatsApp Advanced section
+]
+
+
+# ─── Main Entry Point ─────────────────────────────────────────────────────
+
+
+def render_tools_tab(user_data):
+    st.header("Ferramentas e Integracoes")
+    st.info("Conecte seu assistente a sistemas externos.")
+
+    t_config = user_data.get("tools_config", {})
+    if not t_config:
+        t_config = {}
+
+    # Filtra tools pelo business_type do cliente
+    # Se nao vier do banco (None), assume mode permissivo (mostra tudo) para nao sumir tools
+    raw_btype = user_data.get("business_type")
+
+    if raw_btype:
+        allowed_tools = get_tools_for_business_type(raw_btype)
+        force_show_all = False
+    else:
+        # Legacy/Migration mode: mostra tudo se nao tiver tipo definido
+        allowed_tools = {}
+        force_show_all = True
+
+    # Dict to collect all save configs
+    save_configs = {}
+
+    # ── Registry Tools (filtradas por business_type) ──
+    for tool_name in REGISTRY_TOOL_ORDER:
+        if tool_name not in TOOL_REGISTRY:
+            continue
+
+        # Smart Fallback: Mostra tool se ja tiver config salva (mesmo que filtro esconda)
+        has_saved_config = bool(t_config.get(tool_name))
+
+        if (
+            not force_show_all
+            and tool_name not in allowed_tools
+            and not has_saved_config
+        ):
+            continue  # Nao aplicavel a esse tipo de negocio
+
+        meta = TOOL_REGISTRY[tool_name]
+        is_active, tool_save_dict = _render_tool_section(tool_name, meta, t_config)
+        save_configs[tool_name] = tool_save_dict
+        st.divider()
+
+    # ── LancePilot (special section) ──
+    c_lp_active, lp_token, lp_workspace_id, lp_number = _render_lancepilot_section(
+        user_data
+    )
+    st.divider()
+
+    # ── WhatsApp Advanced (reactions, humanized, security) ──
+    wa_save = _render_whatsapp_advanced_section(t_config, user_data)
+    save_configs.update(wa_save)
+    st.divider()
+
+    # ── Debug Section ──
+    _render_debug_section(user_data)
+
+    # ── Save Button ──
+    if st.button("Salvar Integracoes"):
         new_tools_config = t_config.copy()
 
-        # Save RAG Config
-        new_tools_config["rag_active"] = c_rag_active
-        # Save Kommo
-        new_tools_config["qualificado_kommo_provedor"] = {
-            "active": c_kommo_active,
-            "url": k_url if c_kommo_active else "",
-            "token": k_token if c_kommo_active else "",
-            "pipeline_id": k_pipeline if c_kommo_active else "",
-            "status_id": k_status if c_kommo_active else "",
-        }
-        # Save Betel
-        new_tools_config["consultar_produtos_betel"] = {
-            "active": c_betel_active,
-            "loja_id": b_loja if c_betel_active else "",
-            "access_token": b_access if c_betel_active else "",
-            "secret_token": b_secret if c_betel_active else "",
-        }
-        # Save CEP
-        new_tools_config["consultar_cep"] = {"active": c_cep_active}
-        # Save Enviar Relatório
-        new_tools_config["enviar_relatorio"] = {
-            "active": c_relatorio_active,
-            "grupo_id": r_grupo if c_relatorio_active else "",
-            "instructions": r_instructions if c_relatorio_active else "",
-            "template": r_template if c_relatorio_active else "",
-        }
-        # Save Atendimento Humano
-        new_tools_config["atendimento_humano"] = {
-            "active": c_handoff_active,
-            "timeout_minutes": h_timeout if c_handoff_active else 60,
-            "instructions": h_instructions if c_handoff_active else "",
-        }
-        # Save Desativar IA
-        new_tools_config["desativar_ia"] = {
-            "active": c_stop_active,
-            "instructions": s_instructions if c_stop_active else "",
-        }
-        # Save Criar Lembrete
-        new_tools_config["criar_lembrete"] = {
-            "active": c_reminder_active,
-        }
-        # Save HubSoft Viabilidade
-        new_tools_config["consultar_viabilidade_hubsoft"] = {
-            "active": c_hubsoft_active,
-            "api_url": hs_api_url if c_hubsoft_active else "",
-            "client_id": hs_client_id if c_hubsoft_active else "",
-            "client_secret": hs_client_secret if c_hubsoft_active else "",
-            "username": hs_username if c_hubsoft_active else "",
-            "password": hs_password if c_hubsoft_active else "",
-            "raio": hs_raio if c_hubsoft_active else 250,
-            "detalhar_portas": hs_detalhar_portas if c_hubsoft_active else False,
-        }
-
-        # Save Cal.com (v2)
-        new_tools_config["cal_dot_com"] = {
-            "active": c_cal_active,
-            "api_key": cal_api_key if c_cal_active else "",
-            "event_type_id": cal_event_id if c_cal_active else "",
-        }
-
-        # Save WhatsApp Reactions
-        new_tools_config["whatsapp_reactions"] = {
-            "active": c_react_active,
-            "instructions": react_instructions if c_react_active else "",
-        }
-
-        # Save SGP Interface
-        new_tools_config["sgp_tools"] = {
-            "active": c_sgp_active,
-            "sgp_url": sgp_url if c_sgp_active else "",
-            "sgp_token": sgp_token if c_sgp_active else "",
-            "sgp_app": sgp_app if c_sgp_active else "",
-        }
-
-        # Save WhatsApp Config (Humanized Mode)
-        new_tools_config["whatsapp"] = {"split_by_paragraph": c_split_active}
-
-        # Save Security Lists
-        new_tools_config["security_lists"] = {
-            "allowed_numbers": s_whitelist,
-            "blocked_numbers": s_blocklist,
-        }
+        # Merge registry tool configs
+        for tool_name, cfg in save_configs.items():
+            new_tools_config[tool_name] = cfg
 
         try:
-            import json
-
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    # Save tools_config JSON (without channels)
                     cur.execute(
                         "UPDATE clients SET tools_config = %s WHERE id = %s",
                         (json.dumps(new_tools_config), user_data["id"]),
                     )
-            # Salvar LancePilot em client_providers
+
+            # Save LancePilot in client_providers
             upsert_provider_config(
                 client_id=str(user_data["id"]),
                 provider_type="lancepilot",
@@ -716,6 +568,6 @@ def render_tools_tab(user_data):
             )
 
             user_data["tools_config"] = new_tools_config
-            st.success("Configurações salvas!")
+            st.success("Configuracoes salvas!")
         except Exception as e:
             st.error(f"Erro ao salvar: {e}")

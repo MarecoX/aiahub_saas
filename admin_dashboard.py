@@ -32,15 +32,17 @@ def get_connection():
     return psycopg.connect(DB_URL, row_factory=dict_row, autocommit=True)
 
 
-def create_client(name, token, prompt, api_url=None, timeout=60):
+def create_client(
+    name, token, prompt, api_url=None, timeout=60, business_type="generic"
+):
     try:
         store_id = f"store_{uuid.uuid4().hex[:8]}"
 
         with get_connection() as conn:
             with conn.cursor() as cur:
                 sql = """
-                    INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, business_type)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 # Config padrão limpa
                 tools_config = '{"consultar_cep": true}'
@@ -58,6 +60,7 @@ def create_client(name, token, prompt, api_url=None, timeout=60):
                         tools_config,
                         timeout,
                         final_api_url,
+                        business_type,
                     ),
                 )
 
@@ -73,7 +76,7 @@ def list_clients():
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, token, system_prompt, human_attendant_timeout, api_url, created_at FROM clients ORDER BY created_at DESC"
+                    "SELECT id, name, token, system_prompt, human_attendant_timeout, api_url, COALESCE(business_type, 'generic') as business_type, created_at FROM clients ORDER BY created_at DESC"
                 )
                 rows = cur.fetchall()
                 if rows:
@@ -152,6 +155,19 @@ with tab1:
             value=60,
             help="Tempo que a IA fica pausada se o humano falar.",
         )
+        c_business_type = st.selectbox(
+            "🏢 Tipo de Negócio",
+            options=["generic", "isp", "varejo", "servicos", "food", "saude"],
+            format_func=lambda x: {
+                "generic": "🔧 Genérico",
+                "isp": "🌐 Provedor de Internet (ISP)",
+                "varejo": "🛒 Varejo / Loja",
+                "servicos": "💼 Serviços / Consultoria",
+                "food": "🍕 Foodservice / Restaurante",
+                "saude": "🏥 Saúde / Clínica",
+            }.get(x, x),
+            help="Define quais ferramentas o cliente verá no painel.",
+        )
 
     with col2:
         c_prompt = st.text_area(
@@ -162,7 +178,7 @@ with tab1:
 
     if st.button("💾 Cadastrar Cliente", type="primary"):
         if c_name and c_token:
-            create_client(c_name, c_token, c_prompt, c_url, c_timeout)
+            create_client(c_name, c_token, c_prompt, c_url, c_timeout, c_business_type)
         else:
             st.warning("Preencha Nome e Token!")
 

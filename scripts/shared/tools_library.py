@@ -157,9 +157,8 @@ def consultar_cep(cep: str):
                 "cep": clean_cep,
                 "endereco": formatted_address,
                 "detalhes": components,
-                "lat": location.get("lat"),
                 "lng": location.get("lng"),
-                "system_note": "AÇÃO CONCLUÍDA. NÃO chame esta ferramenta novamente para este CEP. Use os dados retornados.",
+                "system_note": "FIM DA AÇÃO. O endereço já foi retornado. Use estes dados para responder ao cliente. NÃO CHAME MAIS NENHUMA TOOL.",
             }
             logger.info(f"✅ Retornando para o Agente: {final_payload}")
             return final_payload
@@ -194,8 +193,9 @@ def qualificado_kommo_provedor(
         with httpx.Client() as client:
             # 1. Buscar Contact ID pelo Telefone
             # Importante: O telefone deve estar limpo ou no formato que o Kommo espera.
+            clean_phone = telefone.split("@")[0]
             clean_phone = (
-                telefone.replace("+", "").replace("-", "").replace(" ", "").strip()
+                clean_phone.replace("+", "").replace("-", "").replace(" ", "").strip()
             )
             # --- FIX: Formatação BR (Adiciona 55 se vier apenas DDD + Numero) ---
             # Ex: 61981287914 (11 digitos) -> 5561981287914
@@ -410,7 +410,7 @@ def atendimento_humano(
     chat_id: str = None,
     timeout_minutes: int = 60,
     redis_url: str = None,
-):
+) -> str:
     """
     Transfere a conversa para um atendente humano.
     Use em casos de dúvidas complexas, negociações ou quando não encontrar a peça.
@@ -419,6 +419,11 @@ def atendimento_humano(
         motivo (str): Motivo do transbordo (para log).
     """
     import redis
+
+    # DEBUG FORCE LOG
+    logger.info(
+        f"🐛 DEBUG TOOL CALL: atendimento_humano called with motivo={motivo}, chat_id={chat_id}"
+    )
 
     logger.info(f"👤 Transbordo Humano: {motivo} | Chat: {chat_id}")
     if not chat_id:
@@ -804,6 +809,9 @@ def get_enabled_tools(
 
     logger.info(f"🔍 DEBUG TOOLS CONFIG: Keys={list(tools_config.keys())}")
 
+    # Import registry for wrapper_type dispatching
+    from scripts.shared.tool_registry import TOOL_REGISTRY
+
     for tool_name, config_value in tools_config.items():
         if tool_name in AVAILABLE_TOOLS:
             tool_func = AVAILABLE_TOOLS[tool_name]
@@ -816,59 +824,136 @@ def get_enabled_tools(
                 is_active = config_value
 
             if is_active:
-                if (
-                    isinstance(config_value, dict)
-                    and tool_name == "qualificado_kommo_provedor"
-                ):
-                    # Injeta dependências (kommo_config)
-                    kommo_cfg = {k: v for k, v in config_value.items() if k != "active"}
+                # ── REGISTRY-BASED DISPATCH ──
+                registry_entry = TOOL_REGISTRY.get(tool_name, {})
+                wrapper_type = registry_entry.get("wrapper_type", "simple")
+
+                # ── inject_config: Injeta config_dict na kwarg específica ──
+                if wrapper_type == "inject_config":
+                    inject_kwarg = registry_entry.get("inject_kwarg_name", "config")
+                    tool_cfg = (
+                        {k: v for k, v in config_value.items() if k != "active"}
+                        if isinstance(config_value, dict)
+                        else {}
+                    )
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
                     )
 
-                    def create_kommo_wrapper(f, k_cfg):
-                        def wrapped_kommo(nome: str, telefone: str, plano: str):
-                            """Registra um lead qualificado movendo-o para a etapa correta no Kommo CRM."""
-                            return f(
-                                nome=nome,
-                                telefone=telefone,
-                                plano=plano,
-                                kommo_config=k_cfg,
+                    def _make_config_wrapper(f, kwarg_name, cfg):
+                        import inspect
+
+                        sig = inspect.signature(f)
+                        # Cria nova signature SEM o kwarg injetado (esconde do LangChain/LLM)
+                        visible_params = [
+                            p for p in sig.parameters.values() if p.name != kwarg_name
+                        ]
+
+                        def wrapped(**kwargs):
+                            kwargs[kwarg_name] = cfg
+                            valid = {
+                                k: v for k, v in kwargs.items() if k in sig.parameters
+                            }
+                            return f(**valid)
+
+                        # Seta assinatura explícita: LangChain só vê params visíveis
+                        wrapped.__signature__ = sig.replace(parameters=visible_params)
+                        wrapped.__name__ = f.__name__
+                        wrapped.__doc__ = f.__doc__
+                        # FIX: Copia anotações para que Pydantic encontre os tipos dos argumentos visíveis
+                        wrapped.__annotations__ = {
+                            k: v
+                            for k, v in f.__annotations__.items()
+                            if k in [p.name for p in visible_params] or k == "return"
+                        }
+                        return wrapped
+
+                    wrapped_fn = _make_config_wrapper(
+                        fn_captured, inject_kwarg, tool_cfg
+                    )
+                    tools.append(
+                        StructuredTool.from_function(
+                            func=wrapped_fn,
+                            name=tool_name,
+                            description=tool_func.description,
+                        )
+                    )
+                    logger.info(
+                        f"🔧 Tool [{wrapper_type}] Ativada: {tool_name} (injetando {inject_kwarg})"
+                    )
+
+                # ── inject_runtime: Injeta chat_id, redis_url, client_id, etc ──
+                elif wrapper_type == "inject_runtime":
+                    runtime_map = registry_entry.get("runtime_kwargs", {})
+                    fn_captured = (
+                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    )
+
+                    # Resolve runtime values
+                    resolved = {}
+                    for kwarg_name, source in runtime_map.items():
+                        if source == "chat_id":
+                            resolved[kwarg_name] = chat_id
+                        elif source == "client_id":
+                            resolved[kwarg_name] = (
+                                client_config.get("id") if client_config else None
+                            )
+                        elif source.startswith("env:"):
+                            env_key = source.split(":", 1)[1]
+                            resolved[kwarg_name] = os.getenv(
+                                env_key,
+                                "redis://localhost:6379" if "REDIS" in env_key else "",
+                            )
+                        elif source.startswith("config:"):
+                            cfg_key = source.split(":", 1)[1]
+                            resolved[kwarg_name] = config_dict.get(
+                                cfg_key,
+                                registry_entry.get("config_fields", {})
+                                .get(cfg_key, {})
+                                .get("default"),
                             )
 
-                        return wrapped_kommo
+                    def _make_runtime_wrapper(f, injected):
+                        import inspect
 
+                        sig = inspect.signature(f)
+                        # Cria nova signature SEM os kwargs injetados (esconde do LangChain/LLM)
+                        visible_params = [
+                            p for p in sig.parameters.values() if p.name not in injected
+                        ]
+
+                        def wrapped(**kwargs):
+                            final = {**injected, **kwargs}
+                            valid = {
+                                k: v for k, v in final.items() if k in sig.parameters
+                            }
+                            return f(**valid)
+
+                        # Seta assinatura explícita: LangChain só vê params visíveis
+                        wrapped.__signature__ = sig.replace(parameters=visible_params)
+                        wrapped.__name__ = f.__name__
+                        wrapped.__doc__ = f.__doc__
+                        # FIX: Copia anotações para que Pydantic encontre os tipos dos argumentos visíveis
+                        wrapped.__annotations__ = {
+                            k: v
+                            for k, v in f.__annotations__.items()
+                            if k in [p.name for p in visible_params] or k == "return"
+                        }
+                        return wrapped
+
+                    wrapped_fn = _make_runtime_wrapper(fn_captured, resolved)
                     tools.append(
                         StructuredTool.from_function(
-                            func=create_kommo_wrapper(fn_captured, kommo_cfg),
+                            func=wrapped_fn,
                             name=tool_name,
                             description=tool_func.description,
                         )
                     )
-                    logger.info(f"🔧 Tool Parametrizada Ativada: {tool_name}")
-                    logger.info(f"🔧 Tool Parametrizada Ativada: {tool_name}")
-                elif tool_name == "consultar_erp":
-                    # Injeta dependencias (betel_config)
-                    betel_cfg = {k: v for k, v in config_value.items() if k != "active"}
-                    fn_captured = (
-                        tool_func.func if hasattr(tool_func, "func") else tool_func
+                    logger.info(
+                        f"🔧 Tool [{wrapper_type}] Ativada: {tool_name} (runtime: {list(resolved.keys())})"
                     )
 
-                    def create_betel_wrapper(f, b_cfg):
-                        def wrapped_betel(nome_produto: str):
-                            """Consulta o ERP (Betel) para verificar preço e estoque."""
-                            return f(nome_produto=nome_produto, betel_config=b_cfg)
-
-                        return wrapped_betel
-
-                    tools.append(
-                        StructuredTool.from_function(
-                            func=create_betel_wrapper(fn_captured, betel_cfg),
-                            name=tool_name,
-                            description=tool_func.description,
-                        )
-                    )
-                    logger.info(f"🔧 Tool Betel Ativada: {tool_name}")
+                # ── CUSTOM HANDLERS (mantidos como antes) ──
                 elif tool_name == "enviar_relatorio":
                     # Injeta dependencias (grupo_id, uazapi, template)
                     grupo_cfg = config_dict.get("grupo_id", "")
@@ -1048,141 +1133,6 @@ Campos esperados: {placeholders_str}""",
                         f"🔧 Tool Enviar Relatório Dinâmica: grupo={grupo_cfg[:20]}... | Campos detectados: {placeholders_str}"
                     )
 
-                elif tool_name == "atendimento_humano":
-                    # Injeta dependencias (chat_id, timeout, redis_url)
-                    # chat_id será passado em runtime, timeout vem da config
-                    timeout_cfg = config_dict.get("timeout_minutes", 60)
-                    redis_cfg = os.getenv("REDIS_URL", "redis://localhost:6379")
-                    fn_captured = (
-                        tool_func.func if hasattr(tool_func, "func") else tool_func
-                    )
-
-                    def create_handoff_wrapper(f, cid, tm, r_url):
-                        def wrapped_handoff(motivo: str = "Solicitação do cliente"):
-                            """Transfere a conversa para um atendente humano. A IA ficará pausada."""
-                            return f(
-                                motivo=motivo,
-                                chat_id=cid,
-                                timeout_minutes=tm,
-                                redis_url=r_url,
-                            )
-
-                        return wrapped_handoff
-
-                    tools.append(
-                        StructuredTool.from_function(
-                            func=create_handoff_wrapper(
-                                fn_captured, chat_id, timeout_cfg, redis_cfg
-                            ),
-                            name=tool_name,
-                            description=tool_func.description,
-                        )
-                    )
-                    logger.info(
-                        f"🔧 Tool Atendimento Humano Ativada: timeout={timeout_cfg}min"
-                    )
-                elif tool_name == "desativar_ia":
-                    # Injeta dependencias (chat_id, redis_url)
-                    redis_cfg = os.getenv("REDIS_URL", "redis://localhost:6379")
-                    fn_captured = (
-                        tool_func.func if hasattr(tool_func, "func") else tool_func
-                    )
-
-                    def create_stop_wrapper(f, cid, r_url):
-                        def wrapped_stop(motivo: str = "Solicitação do cliente"):
-                            """Desativa a IA permanentemente e para de responder."""
-                            return f(motivo=motivo, chat_id=cid, redis_url=r_url)
-
-                        return wrapped_stop
-
-                    tools.append(
-                        StructuredTool.from_function(
-                            func=create_stop_wrapper(fn_captured, chat_id, redis_cfg),
-                            name=tool_name,
-                            description=tool_func.description,
-                        )
-                    )
-                    logger.info("🔧 Tool Desativar IA Ativada (Opt-out)")
-                elif tool_name == "criar_lembrete":
-                    # Injeta dependencias (chat_id, client_id)
-                    fn_captured = (
-                        tool_func.func if hasattr(tool_func, "func") else tool_func
-                    )
-                    client_id_value = client_config.get("id") if client_config else None
-
-                    def create_reminder_wrapper(f, cid, clid):
-                        def wrapped_reminder(
-                            quando: str,
-                            motivo: str = "Retornar contato conforme solicitado",
-                        ):
-                            """Cria um lembrete para retornar contato com o cliente em uma data futura."""
-                            return f(
-                                quando=quando,
-                                motivo=motivo,
-                                chat_id=cid,
-                                client_id=clid,
-                            )
-
-                        return wrapped_reminder
-
-                    tools.append(
-                        StructuredTool.from_function(
-                            func=create_reminder_wrapper(
-                                fn_captured, chat_id, client_id_value
-                            ),
-                            name=tool_name,
-                            description=tool_func.description,
-                        )
-                    )
-                    logger.info(f"📅 Tool Criar Lembrete Ativada: chat={chat_id}")
-                elif tool_name == "consultar_viabilidade_hubsoft":
-                    # Injeta dependencias (hubsoft_config)
-                    hubsoft_cfg = {
-                        k: v for k, v in config_value.items() if k != "active"
-                    }
-                    fn_captured = (
-                        tool_func.func if hasattr(tool_func, "func") else tool_func
-                    )
-                    # Pega defaults da config
-                    cfg_raio = hubsoft_cfg.get("raio", 250)
-                    cfg_detalhar = hubsoft_cfg.get("detalhar_portas", False)
-
-                    def create_hubsoft_wrapper(
-                        f, h_cfg, default_raio, default_detalhar
-                    ):
-                        def wrapped_hubsoft(
-                            endereco: str,
-                            numero: str,
-                            bairro: str,
-                            cidade: str,
-                            estado: str,
-                        ):
-                            """HUBSOFT: Consulta viabilidade de internet usando o ENDEREÇO COMPLETO (Rua, Número, Bairro, Cidade, UF). Use esta ferramenta se o cliente fornecer o endereço detalhado."""
-                            return f(
-                                endereco=endereco,
-                                numero=numero,
-                                bairro=bairro,
-                                cidade=cidade,
-                                estado=estado,
-                                raio=default_raio,
-                                detalhar_portas=default_detalhar,
-                                hubsoft_config=h_cfg,
-                            )
-
-                        return wrapped_hubsoft
-
-                    tools.append(
-                        StructuredTool.from_function(
-                            func=create_hubsoft_wrapper(
-                                fn_captured, hubsoft_cfg, cfg_raio, cfg_detalhar
-                            ),
-                            name=tool_name,
-                            description=tool_func.description,
-                        )
-                    )
-                    logger.info(
-                        f"🔧 Tool HubSoft Viabilidade Ativada: api={hubsoft_cfg.get('api_url', 'N/A')[:30]}... raio={cfg_raio}m"
-                    )
                 elif tool_name == "cal_dot_com":
                     # Injeta dependencias (api_key, event_type_id)
                     cal_config = config_value if isinstance(config_value, dict) else {}

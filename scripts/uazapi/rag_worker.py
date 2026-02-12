@@ -277,16 +277,6 @@ COMO REAGIR:
 {instructions}
 """
 
-        # 🛑 ANTI-LOOP (IMPORTANTE) - Condicional (Hubsoft, SGP ou CEP Avulso)
-        hubsoft_active = tools_cfg.get("consultar_viabilidade_hubsoft", {}).get(
-            "active"
-        )
-        sgp_active = tools_cfg.get("sgp_tools", {}).get("active")
-        # CEP é default True, mas verificamos se foi desativado explicitamente
-        cep_config = tools_cfg.get("consultar_cep", {})
-        # Se config existe, respeita o 'active'. Se não existe, assume True (padrão do sistema)
-        cep_active = cep_config.get("active", True)
-
         # INSTRUÇÃO DE PRIORIDADE DE FERRAMENTAS
         system_prompt += f"""
 \n⚡ **PRIORIDADE DE EXECUÇÃO** ⚡
@@ -294,14 +284,13 @@ O parâmetro 'chat_id' é: '{chat_id}'
 Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a ferramenta.
 """
 
-        # --- REINFORÇO ANTI-LOOP (RECENCY BIAS) ---
-        if hubsoft_active or sgp_active or cep_active:
-            system_prompt += """
-\n🛑 **ANTI-LOOP (IMPORTANTE)** 🛑
-- Se o usuário enviou um CEP, chame `consultar_cep` **UMA ÚNICA VEZ**.
-- **JAMAIS** chame `consultar_cep` duas vezes seguidas para o mesmo CEP.
-- Se já obteve o retorno da ferramenta, **USE essa informação** para responder ao usuário.
-- **NÃO** tente "verificar novamente". Confie no primeiro resultado.
+        # --- REINFORÇO ANTI-LOOP GLOBAL (RECENCY BIAS) ---
+        system_prompt += """
+\n🚫 **REGRA DE OURO (ANTI-LOOP)** 🚫
+1. **NÃO chame a mesma ferramenta duas vezes** com os mesmos argumentos.
+2. Se a ferramenta retornou dados (mesmo que seja um dicionário JSON), **PARE E RESPONDA** ao usuário usando esses dados.
+3. Não tente "confirmar" chamando a ferramenta de novo. O primeiro resultado é o correto.
+4. Se `consultar_cep` retornou o endereço, **NÃO** chame-a novamente. Apenas diga o endereço para o cliente.
 """
 
     # --- PERSISTÊNCIA DE HISTÓRICO (CRÍTICO PARA FOLLOW-UP) ---
@@ -501,6 +490,30 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
 
         api_override_url = uazapi_cfg.get("url") or ""
         api_override_key = uazapi_cfg.get("token") or client_token or ""
+
+        # --- TRACKING: Marca que a IA respondeu ---
+        try:
+            from saas_db import get_connection as _gc
+
+            _cid = client_config.get("id") if client_config else None
+            if _cid and chat_id:
+                with _gc() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO active_conversations (chat_id, client_id, last_message_at, last_role, status)
+                            VALUES (%s, %s, NOW(), 'ai', 'active')
+                            ON CONFLICT (chat_id, client_id) DO UPDATE SET
+                                last_message_at = NOW(),
+                                last_role = 'ai';
+                        """,
+                            (chat_id, _cid),
+                        )
+                        conn.commit()
+                logger.info(f"\U0001f916 Tracking: IA respondeu em {chat_id}")
+        except Exception as e:
+            logger.warning(f"\u26a0\ufe0f Erro ao trackear resposta IA: {e}")
+        # ------------------------------------------------
 
         Kestra.outputs(
             {

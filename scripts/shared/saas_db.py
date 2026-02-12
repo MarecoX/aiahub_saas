@@ -90,7 +90,8 @@ def get_client_config(token: str):
             with conn.cursor() as cur:
                 sql = """
                     SELECT id, name, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, token,
-                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config, whatsapp_provider
+                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config, whatsapp_provider,
+                           COALESCE(business_type, 'generic') as business_type
                     FROM clients 
                     WHERE token = %s
                 """
@@ -108,7 +109,8 @@ def get_client_config(token: str):
                 sql_provider = """
                     SELECT c.id, c.name, c.system_prompt, c.gemini_store_id, c.tools_config, c.human_attendant_timeout, 
                            c.api_url, c.token, c.lancepilot_token, c.lancepilot_workspace_id, c.lancepilot_number, 
-                           c.lancepilot_active, c.followup_config, c.whatsapp_provider
+                           c.lancepilot_active, c.followup_config, c.whatsapp_provider,
+                           COALESCE(c.business_type, 'generic') as business_type
                     FROM clients c
                     LEFT JOIN client_providers cp ON c.id = cp.client_id
                     WHERE cp.config->>'token' = %s 
@@ -147,7 +149,8 @@ def get_client_config_by_id(client_id: str):
             with conn.cursor() as cur:
                 sql = """
                     SELECT id, name, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, token,
-                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config, whatsapp_provider
+                           lancepilot_token, lancepilot_workspace_id, lancepilot_number, lancepilot_active, followup_config, whatsapp_provider,
+                           COALESCE(business_type, 'generic') as business_type
                     FROM clients 
                     WHERE id = %s
                 """
@@ -460,6 +463,7 @@ def create_client_db(
     timeout=3600,
     store_id=None,
     whatsapp_provider="none",
+    business_type="generic",
 ):
     """
     Cria um novo cliente no banco de dados.
@@ -472,8 +476,8 @@ def create_client_db(
         with get_connection() as conn:
             with conn.cursor() as cur:
                 sql = """
-                    INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash, whatsapp_provider)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, api_url, username, password_hash, whatsapp_provider, business_type)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
                 cur.execute(
@@ -489,6 +493,7 @@ def create_client_db(
                         username,
                         password_hash,
                         whatsapp_provider,
+                        business_type,
                     ),
                 )
                 new_id = cur.fetchone()["id"]
@@ -537,6 +542,7 @@ def update_client_db(client_id, update_dict):
         "name",
         "gemini_store_id",
         "ai_active",
+        "business_type",
     ]
     filtered = {k: v for k, v in update_dict.items() if k in valid_fields}
 
@@ -780,7 +786,7 @@ def log_error(
             # Remove objetos não serializáveis (básico)
             safe_context = {k: str(v) for k, v in context.items()}
             context_json = json.dumps(safe_context)
-        except:
+        except Exception:
             context_json = '{"error": "context_serialization_failed"}'
 
     try:

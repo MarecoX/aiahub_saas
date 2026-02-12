@@ -13,6 +13,7 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 from scripts.shared.saas_db import get_connection, clear_chat_history
+from scripts.shared.tool_registry import BUSINESS_TYPES
 
 try:
     from api.services import gemini_service as gemini_manager
@@ -34,7 +35,7 @@ def render_admin_view():
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT id, name, token, username, is_admin, gemini_store_id, tools_config, human_attendant_timeout, api_url, created_at, whatsapp_provider FROM clients ORDER BY created_at DESC"
+                        "SELECT id, name, token, username, is_admin, gemini_store_id, tools_config, human_attendant_timeout, api_url, created_at, whatsapp_provider, business_type FROM clients ORDER BY created_at DESC"
                     )
                     rows = cur.fetchall()
                     if rows:
@@ -45,9 +46,11 @@ def render_admin_view():
                         # Fix: Converte tools_config para string para evitar ArrowInvalid
                         if "tools_config" in df.columns:
                             df["tools_config"] = df["tools_config"].apply(
-                                lambda x: json.dumps(x)
-                                if isinstance(x, (dict, list))
-                                else (str(x) if x else "{}")
+                                lambda x: (
+                                    json.dumps(x)
+                                    if isinstance(x, (dict, list))
+                                    else (str(x) if x else "{}")
+                                )
                             )
 
                         return df
@@ -55,7 +58,9 @@ def render_admin_view():
         except:
             return pd.DataFrame()
 
-    def create_client(name, prompt, username, password, timeout=60):
+    def create_client(
+        name, prompt, username, password, business_type="generic", timeout=60
+    ):
         from scripts.shared.auth_utils import hash_password
 
         try:
@@ -65,8 +70,8 @@ def render_admin_view():
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     sql = """
-                        INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, username, password_hash, whatsapp_provider)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO clients (name, token, system_prompt, gemini_store_id, tools_config, human_attendant_timeout, username, password_hash, whatsapp_provider, business_type)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """
                     tools_config = '{"consultar_cep": true}'
@@ -82,6 +87,7 @@ def render_admin_view():
                             username,
                             pwd_hash,
                             "none",  # whatsapp_provider - configurado depois
+                            business_type,
                         ),
                     )
                     new_client_id = cur.fetchone()["id"]
@@ -161,6 +167,11 @@ def render_admin_view():
             name = st.text_input("Nome da Empresa")
             user = st.text_input("Username de Login (Ex: empresa1)")
             pwd = st.text_input("Senha Inicial", type="password")
+            b_type = st.selectbox(
+                "Tipo de Negócio",
+                options=list(BUSINESS_TYPES.keys()),
+                format_func=lambda x: BUSINESS_TYPES.get(x, x),
+            )
         with c2:
             prompt = st.text_area(
                 "Prompt Inicial", height=150, value="Você é um assistente útil."
@@ -168,7 +179,7 @@ def render_admin_view():
 
         if st.button("💾 Cadastrar"):
             if name and user and pwd:
-                create_client(name, prompt, user, pwd)
+                create_client(name, prompt, user, pwd, business_type=b_type)
             else:
                 st.warning("Preencha: Nome, Username e Senha.")
 
@@ -226,6 +237,20 @@ def render_admin_view():
                     tools_val = {}
 
             cfg_txt = st.text_area("JSON Tools", value=json.dumps(tools_val, indent=2))
+
+            # --- Business Type Edit ---
+            curr_btype = row.get("business_type")
+            if pd.isna(curr_btype) or curr_btype not in BUSINESS_TYPES:
+                curr_btype = "generic"
+
+            new_btype = st.selectbox(
+                "Tipo de Negócio",
+                options=list(BUSINESS_TYPES.keys()),
+                index=list(BUSINESS_TYPES.keys()).index(curr_btype),
+                key="edit_btype_tab4",
+                format_func=lambda x: BUSINESS_TYPES.get(x, x),
+            )
+
             to_val = st.number_input(
                 "Timeout", value=row.get("human_attendant_timeout", 60)
             )
@@ -243,12 +268,13 @@ def render_admin_view():
                         with conn.cursor() as cur:
                             # Update Tools/Timeout/URL
                             cur.execute(
-                                "UPDATE clients SET tools_config = %s, human_attendant_timeout = %s, api_url = %s, system_prompt = %s WHERE id = %s",
+                                "UPDATE clients SET tools_config = %s, human_attendant_timeout = %s, api_url = %s, system_prompt = %s, business_type = %s WHERE id = %s",
                                 (
                                     cfg_txt,
                                     to_val,
                                     url_val if url_val else None,
                                     sys_prompt,
+                                    new_btype,
                                     row["id"],
                                 ),
                             )
@@ -258,10 +284,88 @@ def render_admin_view():
                     st.error(f"Erro ao salvar: {e}")
 
     with tab5:
+        # --- FILTRO POR CLIENTE ---
+        df_clients = list_clients()
+        client_names = ["Todos"] + (
+            df_clients["name"].tolist() if not df_clients.empty else []
+        )
+        selected_client = st.selectbox(
+            "🏢 Filtrar por Cliente", client_names, key="consumo_filter"
+        )
+
+        # --- INDICADOR DE ATENDIMENTO HUMANO ---
+        st.header("👤 Atendimento Humano")
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    if selected_client == "Todos":
+                        cur.execute("""
+                            SELECT
+                                c.name as cliente,
+                                COUNT(CASE WHEN ac.last_role = 'user' AND ac.last_message_at < NOW() - INTERVAL '5 minutes' THEN 1 END) as aguardando_resposta,
+                                COUNT(CASE WHEN ac.last_role = 'human' THEN 1 END) as atendidos_humano,
+                                COUNT(CASE WHEN ac.last_role = 'ai' THEN 1 END) as atendidos_ia,
+                                COUNT(*) as total_conversas
+                            FROM active_conversations ac
+                            JOIN clients c ON ac.client_id = c.id
+                            WHERE ac.status = 'active'
+                            AND ac.last_message_at > NOW() - INTERVAL '24 hours'
+                            GROUP BY c.name
+                            ORDER BY aguardando_resposta DESC
+                        """)
+                    else:
+                        cur.execute(
+                            """
+                            SELECT
+                                c.name as cliente,
+                                COUNT(CASE WHEN ac.last_role = 'user' AND ac.last_message_at < NOW() - INTERVAL '5 minutes' THEN 1 END) as aguardando_resposta,
+                                COUNT(CASE WHEN ac.last_role = 'human' THEN 1 END) as atendidos_humano,
+                                COUNT(CASE WHEN ac.last_role = 'ai' THEN 1 END) as atendidos_ia,
+                                COUNT(*) as total_conversas
+                            FROM active_conversations ac
+                            JOIN clients c ON ac.client_id = c.id
+                            WHERE ac.status = 'active'
+                            AND ac.last_message_at > NOW() - INTERVAL '24 hours'
+                            AND c.name = %s
+                            GROUP BY c.name
+                            ORDER BY aguardando_resposta DESC
+                        """,
+                            (selected_client,),
+                        )
+                    rows = cur.fetchall()
+
+                    if rows:
+                        df_attend = pd.DataFrame(rows)
+
+                        # Metricas globais
+                        mc1, mc2, mc3, mc4 = st.columns(4)
+                        total_aguardando = df_attend["aguardando_resposta"].sum()
+                        total_humano = df_attend["atendidos_humano"].sum()
+                        total_ia = df_attend["atendidos_ia"].sum()
+                        total_all = df_attend["total_conversas"].sum()
+
+                        mc1.metric("🔴 Aguardando", int(total_aguardando))
+                        mc2.metric("👤 Humano", int(total_humano))
+                        mc3.metric("🤖 IA", int(total_ia))
+                        mc4.metric("💬 Total (24h)", int(total_all))
+
+                        st.dataframe(df_attend, use_container_width=True)
+                    else:
+                        st.info("Nenhuma conversa ativa nas últimas 24h.")
+        except Exception as e:
+            st.warning(f"⚠️ Erro ao buscar indicadores: {e}")
+            st.caption(
+                "Verifique se a tabela active_conversations existe e tem a coluna last_role."
+            )
+
+        st.divider()
+
+        # --- CONSUMO DE IA ---
         st.header("📊 Consumo de IA por Cliente")
         st.caption("Monitoramento de custos de OpenAI, Gemini e Whisper")
 
-        # Filtros
+        # Filtros de data
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input("De", value=datetime.now() - timedelta(days=30))
@@ -272,26 +376,49 @@ def render_admin_view():
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        SELECT 
-                            c.name as cliente,
-                            u.provider,
-                            COUNT(DISTINCT u.chat_id) as atendimentos,
-                            SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
-                            SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
-                            SUM(u.whisper_seconds) as segundos_audio,
-                            SUM(u.images_count) as imagens,
-                            ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
-                            ROUND(SUM(u.cost_usd * 6)::numeric, 2) as custo_brl
-                        FROM usage_tracking u
-                        JOIN clients c ON u.client_id = c.id
-                        WHERE u.created_at BETWEEN %s AND %s
-                        GROUP BY c.name, u.provider
-                        ORDER BY custo_usd DESC
-                    """,
-                        (start_date, end_date),
-                    )
+                    if selected_client == "Todos":
+                        cur.execute(
+                            """
+                            SELECT 
+                                c.name as cliente,
+                                u.provider,
+                                COUNT(DISTINCT u.chat_id) as atendimentos,
+                                SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
+                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
+                                SUM(u.whisper_seconds) as segundos_audio,
+                                SUM(u.images_count) as imagens,
+                                ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
+                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
+                            FROM usage_tracking u
+                            JOIN clients c ON u.client_id = c.id
+                            WHERE u.created_at BETWEEN %s AND %s
+                            GROUP BY c.name, u.provider
+                            ORDER BY custo_usd DESC
+                        """,
+                            (start_date, end_date),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT 
+                                c.name as cliente,
+                                u.provider,
+                                COUNT(DISTINCT u.chat_id) as atendimentos,
+                                SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
+                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
+                                SUM(u.whisper_seconds) as segundos_audio,
+                                SUM(u.images_count) as imagens,
+                                ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
+                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
+                            FROM usage_tracking u
+                            JOIN clients c ON u.client_id = c.id
+                            WHERE u.created_at BETWEEN %s AND %s
+                            AND c.name = %s
+                            GROUP BY c.name, u.provider
+                            ORDER BY custo_usd DESC
+                        """,
+                            (start_date, end_date, selected_client),
+                        )
                     rows = cur.fetchall()
                     if rows:
                         df_usage = pd.DataFrame(rows)

@@ -3,6 +3,7 @@ import os
 import asyncio
 import logging
 import random
+import re
 from kestra import Kestra
 
 # Adiciona shared folder e uazapi folder ao path
@@ -13,6 +14,53 @@ sys.path.append(uazapi_dir)
 
 from uazapi_saas import send_whatsapp_message, send_whatsapp_audio, send_whatsapp_media  # noqa: E402
 from message_buffer import _split_natural_messages  # noqa: E402
+
+
+# Regex que identifica linhas que sao itens de lista (numerados, bullets, emojis)
+_LIST_ITEM_RE = re.compile(
+    r"^\s*"  # espaco opcional
+    r"(?:"
+    r"\d{1,3}[.)\-]"  # 1. ou 1) ou 1-
+    r"|\d{1,3}\s*[\U0001F300-\U0001FAFF]"  # 1 👉 (numero + emoji)
+    r"|[-*•]"  # - ou * ou •
+    r"|[\U0001F300-\U0001FAFF]"  # emoji no inicio
+    r")"
+    r"\s",  # seguido de espaco
+    re.UNICODE,
+)
+
+
+def _merge_list_items(parts: list[str]) -> list[str]:
+    """
+    Reagrupa fragmentos que sao itens de lista numa unica mensagem.
+    Evita que listas numeradas sejam enviadas como mensagens separadas.
+
+    Ex: ["Opcoes:", "1 Comprar", "2 Vender", "3 SAC", "Escolha uma opcao"]
+    ->  ["Opcoes:\n\n1 Comprar\n\n2 Vender\n\n3 SAC", "Escolha uma opcao"]
+    """
+    if len(parts) <= 1:
+        return parts
+
+    merged = []
+    buffer = []
+
+    for part in parts:
+        is_list_item = bool(_LIST_ITEM_RE.match(part))
+
+        if is_list_item:
+            buffer.append(part)
+        else:
+            # Nao e item de lista: flush buffer se tiver
+            if buffer:
+                merged.append("\n".join(buffer))
+                buffer = []
+            merged.append(part)
+
+    # Flush final
+    if buffer:
+        merged.append("\n".join(buffer))
+
+    return merged
 
 
 # --- BOOTSTRAP AMBIENTE KESTRA (Igual ao rag_worker.py) ---
@@ -100,11 +148,13 @@ async def _run_sender_unsafe():
         pre_text = raw_response[last_pos : match.start()].strip()
         if pre_text:
             if use_paragraph_split:
-                # Lógica SID: Quebra por parágrafo (\n\n)
+                # Lógica SID: Quebra por parágrafo (\n\n) + reagrupa listas
                 parts = [p.strip() for p in re.split(r"\n\s*\n", pre_text) if p.strip()]
+                parts = _merge_list_items(parts)
             else:
-                # Lógica Kestra Default: Quebra natural inteligente (listas juntas, etc)
+                # Lógica Kestra Default: Quebra natural inteligente
                 parts = _split_natural_messages(pre_text)
+                parts = _merge_list_items(parts)
 
             for part in parts:
                 try:
@@ -169,13 +219,15 @@ async def _run_sender_unsafe():
     remaining_text = raw_response[last_pos:].strip()
     if remaining_text:
         if use_paragraph_split:
-            # Lógica SID: Quebra por parágrafo
+            # Lógica SID: Quebra por parágrafo + reagrupa listas
             parts = [
                 p.strip() for p in re.split(r"\n\s*\n", remaining_text) if p.strip()
             ]
+            parts = _merge_list_items(parts)
         else:
             # Lógica Kestra Default
             parts = _split_natural_messages(remaining_text)
+            parts = _merge_list_items(parts)
 
         for part in parts:
             try:

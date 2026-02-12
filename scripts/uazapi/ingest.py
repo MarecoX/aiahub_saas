@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 import json
+import base64
 import logging
 
 import redis.asyncio as redis
@@ -117,6 +118,28 @@ async def run_ingest(webhook_data):
 
             except Exception as e:
                 logger.error(f"Erro ao ativar Trap List: {e}")
+
+            # --- TRACKING: Marca que HUMANO respondeu ---
+            try:
+                _token = webhook_data.get("token") or webhook_data.get("instanceId")
+                if _token:
+                    _cfg = get_client_config(_token)
+                    if _cfg:
+                        _cid = _cfg["id"]
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("""
+                                    INSERT INTO active_conversations (chat_id, client_id, last_message_at, last_role, status)
+                                    VALUES (%s, %s, NOW(), 'human', 'active')
+                                    ON CONFLICT (chat_id, client_id) DO UPDATE SET
+                                        last_message_at = NOW(),
+                                        last_role = 'human';
+                                """, (chat_id, _cid))
+                                conn.commit()
+                        logger.info(f"\U0001f464 Tracking: Humano respondeu em {chat_id} (Client {_cid})")
+            except Exception as e:
+                logger.error(f"\u26a0\ufe0f Erro ao trackear resposta humana: {e}")
+            # ------------------------------------------------
 
             return
 
@@ -344,9 +367,19 @@ async def run_ingest(webhook_data):
 
 if __name__ == "__main__":
     # O Kestra passa inputs via variáveis ou args.
-    kestra_input = os.getenv("KESTRA_TRIGGER_BODY") or (
-        sys.argv[1] if len(sys.argv) > 1 else None
-    )
+    # Prioriza B64 (evita erro Pebble com {{product.brand}} do Facebook Ads)
+    kestra_input_b64 = os.getenv("KESTRA_TRIGGER_BODY_B64")
+    if kestra_input_b64:
+        try:
+            kestra_input = base64.b64decode(kestra_input_b64).decode("utf-8")
+            logger.info("📦 Input decodificado de B64 com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao decodificar B64: {e}")
+            kestra_input = None
+    else:
+        kestra_input = os.getenv("KESTRA_TRIGGER_BODY") or (
+            sys.argv[1] if len(sys.argv) > 1 else None
+        )
 
     if not kestra_input:
         logger.error("Nenhum input fornecido.")

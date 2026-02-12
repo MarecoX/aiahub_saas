@@ -20,6 +20,10 @@ class ClientBase(BaseModel):
     whatsapp_provider: Optional[str] = Field(
         "none", description="Provider WhatsApp: none, uazapi, meta, lancepilot"
     )
+    business_type: Optional[str] = Field(
+        "generic",
+        description="Tipo de negócio: generic, isp, varejo, servicos, food, saude",
+    )
 
 
 class ClientCreate(ClientBase):
@@ -31,6 +35,7 @@ class ClientUpdate(BaseModel):
     system_prompt: Optional[str] = None
     human_attendant_timeout: Optional[int] = None
     active: Optional[bool] = None
+    business_type: Optional[str] = None
 
 
 class LancePilotConfig(BaseModel):
