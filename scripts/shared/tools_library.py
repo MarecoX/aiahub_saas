@@ -742,6 +742,244 @@ def consultar_viabilidade_hubsoft(
         return {"error": f"Erro ao consultar viabilidade: {str(e)}"}
 
 
+# --- HUBSOFT CONSULTAR CLIENTE ---
+
+
+@tool
+def consultar_cliente_hubsoft(
+    cpf_cnpj: str,
+    hubsoft_config: dict = None,
+):
+    """
+    Consulta dados cadastrais de um cliente no HubSoft pelo CPF ou CNPJ.
+    Use esta tool quando precisar buscar informações de cadastro do cliente.
+    IMPORTANTE: O resultado inclui o campo 'id_cliente_servico' dos serviços,
+    que é necessário para realizar desbloqueio de confiança.
+
+    Args:
+        cpf_cnpj: CPF ou CNPJ do cliente (apenas números, ex: "12345678901")
+
+    Returns:
+        Dados cadastrais do cliente incluindo serviços contratados.
+    """
+    if not hubsoft_config:
+        return {
+            "error": "Configuração HubSoft não encontrada. Configure as credenciais na ferramenta HubSoft Viabilidade."
+        }
+
+    try:
+        access_token = _get_hubsoft_access_token(hubsoft_config)
+        api_url = hubsoft_config.get("api_url", "").rstrip("/")
+
+        url = f"{api_url}/api/v1/integracao/cliente"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        params = {
+            "busca": "cpf_cnpj",
+            "termo_busca": cpf_cnpj.strip().replace(".", "").replace("-", "").replace("/", ""),
+        }
+
+        logger.info(f"🔍 HubSoft: Consultando cliente CPF/CNPJ {cpf_cnpj}")
+
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        clientes = data.get("clientes", [])
+        if not clientes:
+            return {
+                "encontrado": False,
+                "mensagem": "Nenhum cliente encontrado com este CPF/CNPJ.",
+            }
+
+        cliente = clientes[0]
+        servicos = cliente.get("servicos", [])
+        servicos_formatados = []
+        for s in servicos:
+            servicos_formatados.append({
+                "id_cliente_servico": s.get("id_cliente_servico"),
+                "plano": s.get("nome") or s.get("plano"),
+                "status": s.get("status"),
+                "login": s.get("login"),
+            })
+
+        resultado = {
+            "encontrado": True,
+            "nome": cliente.get("nome_razaosocial") or cliente.get("nome"),
+            "cpf_cnpj": cliente.get("cpf_cnpj"),
+            "email": cliente.get("email"),
+            "telefone": cliente.get("telefone") or cliente.get("celular"),
+            "endereco": cliente.get("endereco"),
+            "status": cliente.get("status"),
+            "servicos": servicos_formatados,
+        }
+
+        logger.info(f"✅ HubSoft: Cliente encontrado - {resultado.get('nome')}")
+        return resultado
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"❌ Erro HTTP HubSoft: {e.response.status_code} - {e.response.text}")
+        return {"error": f"Erro na API HubSoft: {e.response.status_code}"}
+    except Exception as e:
+        logger.error(f"❌ Erro ao consultar cliente HubSoft: {e}")
+        return {"error": f"Erro ao consultar cliente: {str(e)}"}
+
+
+# --- HUBSOFT CONSULTAR FINANCEIRO ---
+
+
+@tool
+def consultar_financeiro_hubsoft(
+    cpf_cnpj: str,
+    hubsoft_config: dict = None,
+):
+    """
+    Consulta faturas e situação financeira de um cliente no HubSoft pelo CPF ou CNPJ.
+    Retorna apenas faturas pendentes (em aberto).
+
+    Args:
+        cpf_cnpj: CPF ou CNPJ do cliente (apenas números, ex: "12345678901")
+
+    Returns:
+        Lista de faturas pendentes do cliente.
+    """
+    if not hubsoft_config:
+        return {
+            "error": "Configuração HubSoft não encontrada. Configure as credenciais na ferramenta HubSoft Viabilidade."
+        }
+
+    try:
+        access_token = _get_hubsoft_access_token(hubsoft_config)
+        api_url = hubsoft_config.get("api_url", "").rstrip("/")
+
+        url = f"{api_url}/api/v1/integracao/cliente/financeiro"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        params = {
+            "busca": "cpf_cnpj",
+            "termo_busca": cpf_cnpj.strip().replace(".", "").replace("-", "").replace("/", ""),
+            "apenas_pendente": "sim",
+        }
+
+        logger.info(f"💰 HubSoft: Consultando financeiro CPF/CNPJ {cpf_cnpj}")
+
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        faturas = data.get("faturas", data.get("titulos", []))
+        if not faturas:
+            return {
+                "tem_pendencia": False,
+                "mensagem": "Nenhuma fatura pendente encontrada para este cliente.",
+            }
+
+        faturas_formatadas = []
+        for f in faturas:
+            faturas_formatadas.append({
+                "vencimento": f.get("data_vencimento") or f.get("vencimento"),
+                "valor": f.get("valor"),
+                "status": f.get("status") or f.get("situacao"),
+                "descricao": f.get("descricao") or f.get("referencia"),
+                "linha_digitavel": f.get("linha_digitavel"),
+                "link_boleto": f.get("link_boleto") or f.get("url_boleto"),
+            })
+
+        logger.info(f"✅ HubSoft: {len(faturas_formatadas)} fatura(s) pendente(s) encontrada(s)")
+        return {
+            "tem_pendencia": True,
+            "total_faturas": len(faturas_formatadas),
+            "faturas": faturas_formatadas,
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"❌ Erro HTTP HubSoft: {e.response.status_code} - {e.response.text}")
+        return {"error": f"Erro na API HubSoft: {e.response.status_code}"}
+    except Exception as e:
+        logger.error(f"❌ Erro ao consultar financeiro HubSoft: {e}")
+        return {"error": f"Erro ao consultar financeiro: {str(e)}"}
+
+
+# --- HUBSOFT DESBLOQUEIO DE CONFIANÇA ---
+
+
+@tool
+def desbloqueio_de_confianca_hubsoft(
+    id_cliente_servico: str,
+    hubsoft_config: dict = None,
+):
+    """
+    Realiza desbloqueio de confiança de um serviço do cliente no HubSoft.
+    IMPORTANTE: Antes de usar esta tool, é necessário consultar o cliente primeiro
+    (usando consultar_cliente_hubsoft) para obter o 'id_cliente_servico' correto.
+
+    Args:
+        id_cliente_servico: ID do serviço do cliente (obtido na consulta de cliente, campo 'id_cliente_servico')
+
+    Returns:
+        Resultado do desbloqueio de confiança.
+    """
+    if not hubsoft_config:
+        return {
+            "error": "Configuração HubSoft não encontrada. Configure as credenciais na ferramenta HubSoft Viabilidade."
+        }
+
+    dias = hubsoft_config.get("dias_desbloqueio", 3)
+
+    try:
+        access_token = _get_hubsoft_access_token(hubsoft_config)
+        api_url = hubsoft_config.get("api_url", "").rstrip("/")
+
+        url = f"{api_url}/api/v1/integracao/cliente/desbloqueio_confianca"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        params = {
+            "id_cliente_servico": str(id_cliente_servico),
+            "dias_desbloqueio": str(dias),
+        }
+
+        logger.info(
+            f"🔓 HubSoft: Desbloqueio de confiança - Serviço {id_cliente_servico}, {dias} dia(s)"
+        )
+
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        status = data.get("status", "unknown")
+        msg = data.get("msg", data.get("mensagem", ""))
+
+        if status == "success" or "sucesso" in str(msg).lower():
+            logger.info(f"✅ HubSoft: Desbloqueio realizado com sucesso")
+            return {
+                "sucesso": True,
+                "mensagem": f"Desbloqueio de confiança realizado com sucesso por {dias} dia(s).",
+                "detalhes": msg,
+            }
+        else:
+            logger.warning(f"⚠️ HubSoft: Desbloqueio retornou status {status}: {msg}")
+            return {
+                "sucesso": False,
+                "mensagem": msg or f"Não foi possível realizar o desbloqueio. Status: {status}",
+            }
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"❌ Erro HTTP HubSoft: {e.response.status_code} - {e.response.text}")
+        return {"error": f"Erro na API HubSoft: {e.response.status_code}"}
+    except Exception as e:
+        logger.error(f"❌ Erro ao realizar desbloqueio HubSoft: {e}")
+        return {"error": f"Erro ao realizar desbloqueio: {str(e)}"}
+
+
 # Mapa de Funções Disponíveis (Nome no JSON do DB -> Função Python)
 AVAILABLE_TOOLS = {
     "consultar_cep": consultar_cep,
@@ -752,6 +990,9 @@ AVAILABLE_TOOLS = {
     "desativar_ia": desativar_ia,
     "criar_lembrete": criar_lembrete,
     "consultar_viabilidade_hubsoft": consultar_viabilidade_hubsoft,
+    "consultar_cliente_hubsoft": consultar_cliente_hubsoft,
+    "consultar_financeiro_hubsoft": consultar_financeiro_hubsoft,
+    "desbloqueio_de_confianca_hubsoft": desbloqueio_de_confianca_hubsoft,
     "cal_dot_com": "cal_dot_com",  # Placeholder para group tool
     "whatsapp_reactions": "whatsapp_reactions",  # String para evitar NameError
     "sgp_tools": "sgp_tools",  # Placeholder para SGP (Viabilidade + Pré-Cadastro)
@@ -836,6 +1077,14 @@ def get_enabled_tools(
                         if isinstance(config_value, dict)
                         else {}
                     )
+                    # config_source: herda credenciais de outra tool (ex: HubSoft compartilhado)
+                    config_source = registry_entry.get("config_source")
+                    if config_source:
+                        base_cfg = tools_config.get(config_source, {})
+                        if isinstance(base_cfg, dict):
+                            merged = {k: v for k, v in base_cfg.items() if k != "active"}
+                            merged.update(tool_cfg)  # tool-specific fields override
+                            tool_cfg = merged
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
                     )

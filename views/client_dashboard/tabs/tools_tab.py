@@ -471,6 +471,9 @@ REGISTRY_TOOL_ORDER = [
     "desativar_ia",
     "criar_lembrete",
     "consultar_viabilidade_hubsoft",
+    "consultar_cliente_hubsoft",
+    "consultar_financeiro_hubsoft",
+    "desbloqueio_de_confianca_hubsoft",
     "cal_dot_com",
     "sgp_tools",
     # whatsapp_reactions is rendered in the WhatsApp Advanced section
