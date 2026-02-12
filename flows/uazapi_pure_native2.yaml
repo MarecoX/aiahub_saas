@@ -33,7 +33,7 @@ tasks:
       - python Kestra_2.0/scripts/uazapi/ingest.py
 
     env:
-      KESTRA_TRIGGER_BODY: "{{ (inputs.message ?? trigger.body ?? {}) | json }}"
+      KESTRA_TRIGGER_BODY_B64: "{{ (inputs.message ?? trigger.body ?? {}) | json | base64encode }}"
       REDIS_URL: "{{ kv('REDIS_URL') }}"
       UAZAPI_URL: "{{ kv('UAZAPI_URL') }}"
       UAZAPI_KEY: "{{ kv('UAZAPI_KEY') }}"

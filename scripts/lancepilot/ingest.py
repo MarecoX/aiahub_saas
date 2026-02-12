@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import base64
 import redis.asyncio as redis
 from kestra import Kestra
 
@@ -32,8 +33,17 @@ async def run_ingest():
     """
     logger.info("🚀 Iniciando Ingestão LancePilot")
 
-    # 1. Inputs do Kestra
-    body_json = os.getenv("KESTRA_TRIGGER_BODY", "{}")
+    # 1. Inputs do Kestra (Prioriza B64 para evitar erro Pebble com {{ }} no payload)
+    body_b64 = os.getenv("KESTRA_TRIGGER_BODY_B64")
+    if body_b64:
+        try:
+            body_json = base64.b64decode(body_b64).decode("utf-8")
+            logger.info("📦 Input decodificado de B64 com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao decodificar B64: {e}")
+            body_json = "{}"
+    else:
+        body_json = os.getenv("KESTRA_TRIGGER_BODY", "{}")
     webhook_token = os.getenv("KESTRA_WEBHOOK_TOKEN")
 
     if not body_json:
