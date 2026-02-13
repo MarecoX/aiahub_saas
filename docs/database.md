@@ -65,6 +65,31 @@ erDiagram
         VARCHAR file_hash UK "Para evitar duplicatas"
         VARCHAR google_file_uri "URI no Gemini File API"
     }
+
+    clients ||--o{ conversation_events : "registra"
+    clients ||--o{ metrics_daily : "agrega"
+
+    conversation_events {
+        BIGSERIAL id PK
+        UUID client_id FK
+        TEXT chat_id "Conversa"
+        VARCHAR event_type "msg_received | ai_responded | human_takeover..."
+        JSONB event_data "Dados extras do evento"
+        TIMESTAMPTZ created_at
+    }
+
+    metrics_daily {
+        BIGSERIAL id PK
+        UUID client_id FK
+        DATE date "Dia da agregacao"
+        INT total_conversations
+        INT resolved_by_ai
+        INT resolved_by_human
+        INT human_takeovers
+        INT avg_response_time_ms
+        DECIMAL total_cost_usd
+        JSONB tools_used "Contagem por tool"
+    }
 ```
 
 ## 📋 Detalhe das Tabelas
@@ -137,6 +162,99 @@ Tabela vital para os **Workers de Follow-up**. Ela mantém o "estado atual" de c
 Armazena o histórico de conversa para exibir na interface "Inbox 2.0" e para fornecer contexto ("Memória") para a IA.
 *   **Particionamento:** Os dados não são fisicamente separados. A segurança é garantida pela cláusula `WHERE client_id = ...` em todas as queries no `saas_db.py`.
 
+
+## 📊 Arquitetura de Métricas (Proposta ADR-003)
+
+Para escala e análise de métricas da IA, o sistema adota **3 camadas**: Event Log + Agregação Pré-calculada + Leitura Instantânea.
+
+### Camada 1: `conversation_events` (Source of Truth)
+
+Tabela append-only que registra cada transição de forma imutável. Custo: 1 INSERT por evento (~0ms extra).
+
+```sql
+CREATE TABLE conversation_events (
+    id          BIGSERIAL PRIMARY KEY,
+    client_id   UUID NOT NULL REFERENCES clients(id),
+    chat_id     TEXT NOT NULL,
+    event_type  VARCHAR(50) NOT NULL,
+    event_data  JSONB DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_conv_events_client_time ON conversation_events (client_id, created_at);
+CREATE INDEX idx_conv_events_chat ON conversation_events (client_id, chat_id, created_at);
+CREATE INDEX idx_conv_events_type ON conversation_events (event_type, created_at);
+```
+
+**Tipos de evento (`event_type`):**
+
+| Evento | Descrição | `event_data` exemplo |
+| :--- | :--- | :--- |
+| `msg_received` | Mensagem do usuário final | `{"source": "uazapi"}` |
+| `ai_responded` | IA gerou resposta | `{"response_time_ms": 1200, "tokens": 350}` |
+| `human_takeover` | Humano assumiu atendimento | `{"reason": "tool_call"}` |
+| `human_responded` | Humano respondeu | `{}` |
+| `followup_sent` | Follow-up disparado | `{"stage": 2}` |
+| `resolved` | Conversa resolvida | `{"resolved_by": "ai"}` |
+| `tool_used` | Tool executada pela IA | `{"tool": "consultar_viabilidade_hubsoft"}` |
+
+### Camada 2: `metrics_daily` (Agregação Pré-calculada)
+
+Tabela atualizada por um worker periódico (cron 5-15 min). O dashboard lê **somente desta tabela** = queries instantâneas.
+
+```sql
+CREATE TABLE metrics_daily (
+    id                      BIGSERIAL PRIMARY KEY,
+    client_id               UUID NOT NULL REFERENCES clients(id),
+    date                    DATE NOT NULL,
+    total_conversations     INT DEFAULT 0,
+    total_messages_in       INT DEFAULT 0,
+    total_messages_out      INT DEFAULT 0,
+    resolved_by_ai          INT DEFAULT 0,
+    resolved_by_human       INT DEFAULT 0,
+    human_takeovers         INT DEFAULT 0,
+    avg_response_time_ms    INT DEFAULT 0,
+    avg_resolution_time_ms  INT DEFAULT 0,
+    followups_sent          INT DEFAULT 0,
+    followups_converted     INT DEFAULT 0,
+    tools_used              JSONB DEFAULT '{}',
+    total_cost_usd          DECIMAL(10,4) DEFAULT 0,
+    updated_at              TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (client_id, date)
+);
+```
+
+### Camada 3: Worker de Agregação (Kestra Cron)
+
+Um worker que roda a cada 5 minutos agrega os eventos em `metrics_daily` via `UPSERT`:
+
+```
+conversation_events (append-only)
+    │
+    └── metrics_worker (cron 5min)
+            │
+            └── UPSERT metrics_daily
+                    │
+                    └── Dashboard lê (instantâneo)
+```
+
+### Métricas Deriváveis
+
+Com o event log, qualquer métrica pode ser calculada:
+
+| Métrica | Fórmula |
+| :--- | :--- |
+| Taxa de resolução IA | `resolved_by_ai / total_conversations` |
+| Taxa de handoff humano | `human_takeovers / total_conversations` |
+| Tempo médio de resposta | `avg_response_time_ms` |
+| Eficácia de followup | `followups_converted / followups_sent` |
+| Horários de pico | `GROUP BY EXTRACT(HOUR FROM created_at)` |
+| Custo por conversa | `total_cost_usd / total_conversations` |
+| Tools mais usadas | Agregação do campo `tools_used` |
+
+> **Por que não query ao vivo?** Queries de agregação sobre `chat_messages` e `active_conversations` em tempo real ficam lentas com escala (full table scan). A camada de pré-agregação garante que o dashboard sempre responde em <50ms independente do volume de dados.
+
+---
 
 ## ⚙️ Acesso a Dados (DAO)
 

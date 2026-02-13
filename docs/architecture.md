@@ -105,6 +105,8 @@ PostgreSQL é a fonte da verdade.
 
 > **Decisão de Design (ADR-002 - 2026-01):** Configurações de **provedores de comunicação** (Uazapi, LancePilot, Meta) foram movidas para a tabela `client_providers`. Isso permite múltiplas instâncias do mesmo provedor por cliente e separação clara de responsabilidades. Os workers usam sistema de fallback para retrocompatibilidade.
 
+> **Decisão de Design (ADR-003 - 2026-02):** Métricas da IA usam arquitetura de **3 camadas**: Event Log (`conversation_events`) → Worker de Agregação (cron 5min) → Tabela Pré-calculada (`metrics_daily`). Isso garante leitura instantânea no dashboard (<50ms) independente do volume de dados, sem impactar a performance dos workers de ingest/RAG. Ver detalhes completos em `docs/database.md`.
+
 ## 🔄 Compatibilidade e Migração (Fallback Strategy)
 
 Para garantir que clientes antigos continuem funcionando enquanto migramos para `client_providers`, o sistema implementa a seguinte lógica de prioridade na resolução de credenciais (ex: em `rag_worker.py`):
@@ -116,3 +118,36 @@ Para garantir que clientes antigos continuem funcionando enquanto migramos para 
     *   **Token/Key:** `clients.token` ou `clients.tools_config['whatsapp']['key']`
 
 > **Nota:** O objetivo é depreciar as colunas `token`, `api_url` e `whatsapp_provider` da tabela `clients` após a migração completa de todos os tenants.
+
+---
+
+## 📊 Pipeline de Métricas (ADR-003)
+
+O painel de métricas da IA opera com 3 camadas para performance em escala:
+
+```
+┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│   Ingest / RAG  │────▶│  conversation_events  │────▶│  metrics_daily  │
+│   Workers       │     │  (append-only log)    │     │  (pré-agregado) │
+│                 │     │  ~0ms por INSERT      │     │                 │
+└─────────────────┘     └──────────────────────┘     └────────┬────────┘
+                               │                              │
+                               │  metrics_worker (cron 5min)  │
+                               └──────────────────────────────┘
+                                                              │
+                                                    ┌─────────▼─────────┐
+                                                    │    Dashboard      │
+                                                    │  (leitura <50ms)  │
+                                                    └───────────────────┘
+```
+
+### Por que esta arquitetura?
+
+| Alternativa | Escrita | Leitura Dashboard | Escala |
+| :--- | :--- | :--- | :--- |
+| Query ao vivo (full scan) | Nenhuma | Lenta | Ruim |
+| Só event log | 1 INSERT | Média (agregação) | Boa |
+| **Event log + agregação (escolhido)** | **1 INSERT** | **Instantânea** | **Excelente** |
+| Time-series DB externo | Rápida | Rápida | Excelente (+ infra) |
+
+A abordagem escolhida usa somente PostgreSQL (sem nova infra) e permite derivar qualquer métrica futura a partir do event log imutável.
