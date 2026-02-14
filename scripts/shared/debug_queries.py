@@ -5,7 +5,18 @@ Mantém o saas_db.py limpo e focado em operações core.
 """
 
 import logging
-from saas_db import get_connection
+import os
+import sys
+
+# Garante que scripts/shared está no path para imports funcionarem
+_shared_dir = os.path.dirname(os.path.abspath(__file__))
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+
+try:
+    from shared.saas_db import get_connection
+except ImportError:
+    from saas_db import get_connection
 
 logger = logging.getLogger("DebugQueries")
 
