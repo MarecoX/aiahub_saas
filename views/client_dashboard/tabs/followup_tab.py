@@ -1,3 +1,4 @@
+import json
 import streamlit as st
 import os
 import sys
@@ -98,8 +99,6 @@ def render_followup_tab(user_data):
     if st.button("💾 Salvar Configuração de Follow-up", type="primary"):
         final_config = {"active": active, "stages": st.session_state[stages_key]}
         try:
-            import json
-
             with get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(

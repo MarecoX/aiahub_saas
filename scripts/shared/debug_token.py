@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -32,8 +33,6 @@ def debug_db_token(target_token):
                 if row:
                     print(f"✅ FOUND CLIENT: ID={row['id']}, Name={row['name']}")
                     print("Status: VALID")
-
-                    import json
 
                     config = row["tools_config"]
                     if isinstance(config, str):

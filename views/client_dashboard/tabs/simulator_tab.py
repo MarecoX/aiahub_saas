@@ -1,3 +1,4 @@
+import json
 import streamlit as st
 import asyncio
 import os
@@ -150,8 +151,6 @@ def render_simulator_tab(user_data):
                                     st.markdown(f"✅ **Resultado ({m.name}):**")
                                     # Tenta mostrar JSON bonito se der, senao texto
                                     try:
-                                        import json
-
                                         st.json(json.loads(m.content))
                                     except:
                                         st.text(m.content)
