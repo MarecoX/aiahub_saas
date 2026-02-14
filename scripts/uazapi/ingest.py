@@ -16,7 +16,7 @@ sys.path.insert(
 
 from message_handler import handle_message
 from config import REDIS_URL, BUFFER_KEY_SUFIX, BUFFER_TTL
-from saas_db import get_connection, get_client_config
+from saas_db import get_connection, get_client_config, log_event
 
 # Configuração de Logger
 logging.basicConfig(level=logging.INFO)
@@ -137,6 +137,10 @@ async def run_ingest(webhook_data):
                                 """, (chat_id, _cid))
                                 conn.commit()
                         logger.info(f"\U0001f464 Tracking: Humano respondeu em {chat_id} (Client {_cid})")
+                        # Metrics: registra evento de resposta humana
+                        log_event(str(_cid), chat_id, "human_responded")
+                        if is_permanent_stop:
+                            log_event(str(_cid), chat_id, "human_takeover", {"reason": "permanent_stop"})
             except Exception as e:
                 logger.error(f"\u26a0\ufe0f Erro ao trackear resposta humana: {e}")
             # ------------------------------------------------
@@ -351,6 +355,8 @@ async def run_ingest(webhook_data):
                     logger.info(
                         f"🔄 Tracking atualizado para {chat_id} (Client {client_id}) - User Reset"
                     )
+                    # Metrics: registra mensagem recebida
+                    log_event(str(client_id), chat_id, "msg_received", {"source": "uazapi"})
         except Exception as e:
             logger.error(f"⚠️ Erro ao atualizar tracking: {e}")
         # ------------------------------------------

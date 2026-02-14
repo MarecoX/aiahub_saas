@@ -17,7 +17,7 @@ tasks:
     type: io.kestra.plugin.scripts.python.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: ALWAYS
+      pullPolicy: IF_NOT_PRESENT
     containerImage: marsllator/kestra-api-manager:latest
     
     namespaceFiles:
