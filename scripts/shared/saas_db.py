@@ -47,7 +47,8 @@ else:
 
 # Global Pool variable
 _pool = None
-_table_initialized = False  # Flag para evitar chamadas repetidas
+_error_table_initialized = False
+_chat_table_initialized = False
 
 
 def get_connection():
@@ -610,8 +611,8 @@ def ensure_chat_messages_table():
     Cria a tabela de mensagens se não existir.
     LAZY INIT: Só executa uma vez quando realmente precisar.
     """
-    global _table_initialized
-    if _table_initialized:
+    global _chat_table_initialized
+    if _chat_table_initialized:
         return  # Já inicializado, não precisa fazer nada
 
     sql = """
@@ -630,7 +631,7 @@ def ensure_chat_messages_table():
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
-        _table_initialized = True
+        _chat_table_initialized = True
         logger.info("✅ Tabela chat_messages verificada/criada.")
     except Exception as e:
         logger.error(f"❌ Erro ao criar tabela chat_messages: {e}")
@@ -935,7 +936,7 @@ def get_metrics_summary(client_id: str) -> dict:
         return {}
 
 
-# Initialize table logic on module load (safe chack)
-if not _table_initialized:
+# Initialize error_logs table on module load
+if not _error_table_initialized:
     init_error_log_table()
-    _table_initialized = True
+    _error_table_initialized = True
