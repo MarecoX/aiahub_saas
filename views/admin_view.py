@@ -443,9 +443,13 @@ def render_admin_view():
             st.info("Execute o SQL de criação da tabela no Supabase.")
 
     with tab6:
-        st.header("Debug")
-        st.info("Limpeza de Chat")
-        cid = st.text_input("Chat ID")
-        if st.button("Limpar"):
-            clear_chat_history(cid)
-            st.success("Limpo.")
+        st.header("🚨 Centro de Alertas & Debug")
+        st.caption("Visão 360° do sistema: erros, loops, conversas e custos.")
+
+        try:
+            from views.admin_debug_tab import render_admin_debug_tab
+
+            render_admin_debug_tab()
+        except ImportError as e:
+            st.error(f"Erro ao carregar painel de debug: {e}")
+            st.info("Verifique se o arquivo `views/admin_debug_tab.py` existe.")
