@@ -13,7 +13,7 @@ sys.path.append(shared_dir)
 sys.path.append(uazapi_dir)
 
 from uazapi_saas import send_whatsapp_message, send_whatsapp_audio, send_whatsapp_media  # noqa: E402
-from message_buffer import _split_natural_messages  # noqa: E402
+from message_buffer import _split_natural_messages, convert_md_to_whatsapp  # noqa: E402
 
 
 # Regex que identifica linhas que sao itens de lista (numerados, bullets, emojis)
@@ -123,6 +123,10 @@ async def _run_sender_unsafe():
                 logger.info("🔪 Modo 'Split by Paragraph' ATIVADO para este cliente.")
     except Exception as e:
         logger.warning(f"⚠️ Erro ao buscar config do cliente para split logic: {e}")
+
+    # --- MARKDOWN → WHATSAPP CONVERSION ---
+    # Aplica conversao ANTES de qualquer split (ambos os modos recebem texto limpo)
+    raw_response = convert_md_to_whatsapp(raw_response)
 
     # --- SEO/SEQUENTIAL SENDING LOGIC ---
     # O objetivo é respeitar a ordem: Texto -> Imagem -> Texto -> Video...

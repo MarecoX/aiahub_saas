@@ -43,6 +43,35 @@ import re
 import random
 
 
+def convert_md_to_whatsapp(text: str) -> str:
+    """
+    Converte Markdown generico para formatacao compativel com WhatsApp.
+    - **bold** ou __bold__ → *bold*
+    - ~~strike~~ → ~strike~
+    - [texto](url) → texto (url)
+    - Remove headers (#, ##, ###)
+    """
+    if not text:
+        return text
+
+    # Links Markdown: [texto](url) → texto (url)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", r"\1 (\2)", text)
+
+    # Bold: **text** → *text*
+    text = text.replace("**", "*")
+
+    # Bold alternativo: __text__ → *text*  (cuidado para nao pegar snake_case)
+    text = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"*\1*", text)
+
+    # Strikethrough: ~~text~~ → ~text~
+    text = re.sub(r"~~(.+?)~~", r"~\1~", text)
+
+    # Remove headers markdown
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
+    return text
+
+
 def _split_natural_messages(text: str) -> list[str]:
     """
     Divide o texto em blocos naturais.
@@ -53,10 +82,7 @@ def _split_natural_messages(text: str) -> list[str]:
         return []
 
     # Limpeza de Markdown
-    text = text.replace("**", "*")  # Converte bold MD para bold WhatsApp
-    text = (
-        text.replace("### ", "").replace("## ", "").replace("# ", "")
-    )  # Remove headers
+    text = convert_md_to_whatsapp(text)
 
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     if not lines:
