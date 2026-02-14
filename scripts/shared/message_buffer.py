@@ -2,7 +2,6 @@ import asyncio
 import redis.asyncio as redis
 from collections import defaultdict
 from config import REDIS_URL, BUFFER_KEY_SUFIX, BUFFER_TTL, DEBOUNCE_SECONDS
-from uazapi import send_whatsapp_message
 
 import logging
 
