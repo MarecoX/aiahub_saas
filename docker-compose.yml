@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Serviço da API (FastAPI)
   api:
-    image: marsllator/kestra-api-manager:latest
+    image: ghcr.io/marecox/aiahub_saas:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -44,7 +44,7 @@ services:
 
   # Serviço do Painel (Streamlit)
   dashboard:
-    image: marsllator/kestra-api-manager:latest
+    image: ghcr.io/marecox/aiahub_saas:latest
     build:
       context: .
       dockerfile: Dockerfile

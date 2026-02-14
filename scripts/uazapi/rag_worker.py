@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import json
 import logging
 import redis.asyncio as redis
 from datetime import datetime
@@ -204,8 +205,6 @@ async def run_rag():
         return
 
     # Parse JSON Messages (Protocolo v2: {"text": "...", "id": "..."})
-    import json
-
     final_texts = []
     last_msg_id = None
 

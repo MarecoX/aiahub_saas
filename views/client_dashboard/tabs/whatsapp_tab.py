@@ -1,3 +1,4 @@
+import json
 import streamlit as st
 import asyncio
 import os
@@ -327,8 +328,6 @@ def render_whatsapp_tab(user_data):
                     new_tools["whatsapp"] = new_wa
 
                     try:
-                        import json
-
                         with get_connection() as conn:
                             with conn.cursor() as cur:
                                 cur.execute(

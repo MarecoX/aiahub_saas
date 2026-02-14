@@ -1,3 +1,4 @@
+import json
 import os
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -400,8 +401,6 @@ def upsert_provider_config(
     Returns:
         UUID do registro criado/atualizado ou None em caso de erro
     """
-    import json
-
     if not client_id or not provider_type:
         return None
 
@@ -470,8 +469,6 @@ def create_client_db(
     Cria um novo cliente no banco de dados.
     """
     try:
-        import json
-
         default_tools = json.dumps({"consultar_cep": True})
 
         with get_connection() as conn:
@@ -571,8 +568,6 @@ def update_tools_config_db(client_id, new_config_dict):
     Atualiza o JSONB tools_config completo.
     """
     try:
-        import json
-
         config_json = json.dumps(new_config_dict)
 
         with get_connection() as conn:
@@ -779,8 +774,6 @@ def log_error(
     )
 
     # Garante que context seja JSON safe
-    import json
-
     context_json = "{}"
     if context:
         try:
@@ -838,8 +831,6 @@ def log_event(client_id: str, chat_id: str, event_type: str, event_data: dict = 
     """
     if not DB_URL or not client_id or not chat_id:
         return
-
-    import json
 
     try:
         data_json = json.dumps(event_data or {})
