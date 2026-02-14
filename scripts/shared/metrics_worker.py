@@ -149,7 +149,7 @@ def cleanup_old_events(days_to_keep: int = 90):
                 cur.execute(
                     """
                     DELETE FROM conversation_events
-                    WHERE created_at < CURRENT_DATE - INTERVAL '%s days'
+                    WHERE created_at < CURRENT_DATE - make_interval(days => %s)
                     """,
                     (days_to_keep,)
                 )

@@ -500,11 +500,9 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
 
         # --- TRACKING: Marca que a IA respondeu ---
         try:
-            from saas_db import get_connection as _gc
-
             _cid = client_config.get("id") if client_config else None
             if _cid and chat_id:
-                with _gc() as conn:
+                with get_connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
                             """
