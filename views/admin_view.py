@@ -450,6 +450,21 @@ def render_admin_view():
             from views.admin_debug_tab import render_admin_debug_tab
 
             render_admin_debug_tab()
-        except ImportError as e:
+        except Exception as e:
+            import traceback
+
             st.error(f"Erro ao carregar painel de debug: {e}")
-            st.info("Verifique se o arquivo `views/admin_debug_tab.py` existe.")
+            st.code(traceback.format_exc(), language="python")
+
+            # Fallback: limpar chat básico
+            st.markdown("---")
+            st.info("Limpeza de Chat (modo fallback)")
+            cid = st.text_input("Chat ID", key="debug_fallback_chat")
+            if st.button("Limpar", key="debug_fallback_btn"):
+                try:
+                    from scripts.shared.saas_db import clear_chat_history
+
+                    clear_chat_history(cid)
+                    st.success("Limpo.")
+                except Exception:
+                    st.error("Falha ao limpar chat.")
