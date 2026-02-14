@@ -4,6 +4,7 @@ Centraliza o salvamento de métricas de uso.
 """
 
 import logging
+from datetime import timedelta
 from saas_db import get_connection
 
 logger = logging.getLogger("UsageTracker")
@@ -125,9 +126,9 @@ def get_client_usage_summary(client_id: str, days: int = 30) -> dict:
                         SUM(cost_usd) as custo_usd
                     FROM usage_tracking
                     WHERE client_id = %s
-                    AND created_at > NOW() - INTERVAL '%s days'
+                    AND created_at > NOW() - %s
                 """,
-                    (client_id, days),
+                    (client_id, timedelta(days=days)),
                 )
                 row = cur.fetchone()
                 if row:

@@ -372,6 +372,9 @@ def render_admin_view():
         with col2:
             end_date = st.date_input("Até", value=datetime.now())
 
+        # end_date + 1 dia para incluir o dia completo (date sem hora = meia-noite)
+        end_date_exclusive = end_date + timedelta(days=1)
+
         # Query agregada
         try:
             with get_connection() as conn:
@@ -379,7 +382,7 @@ def render_admin_view():
                     if selected_client == "Todos":
                         cur.execute(
                             """
-                            SELECT 
+                            SELECT
                                 c.name as cliente,
                                 u.provider,
                                 COUNT(DISTINCT u.chat_id) as atendimentos,
@@ -391,16 +394,16 @@ def render_admin_view():
                                 ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
                             FROM usage_tracking u
                             JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at BETWEEN %s AND %s
+                            WHERE u.created_at >= %s AND u.created_at < %s
                             GROUP BY c.name, u.provider
                             ORDER BY custo_usd DESC
                         """,
-                            (start_date, end_date),
+                            (start_date, end_date_exclusive),
                         )
                     else:
                         cur.execute(
                             """
-                            SELECT 
+                            SELECT
                                 c.name as cliente,
                                 u.provider,
                                 COUNT(DISTINCT u.chat_id) as atendimentos,
@@ -412,12 +415,12 @@ def render_admin_view():
                                 ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
                             FROM usage_tracking u
                             JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at BETWEEN %s AND %s
+                            WHERE u.created_at >= %s AND u.created_at < %s
                             AND c.name = %s
                             GROUP BY c.name, u.provider
                             ORDER BY custo_usd DESC
                         """,
-                            (start_date, end_date, selected_client),
+                            (start_date, end_date_exclusive, selected_client),
                         )
                     rows = cur.fetchall()
                     if rows:

@@ -7,6 +7,7 @@ Mantém o saas_db.py limpo e focado em operações core.
 import logging
 import os
 import sys
+from datetime import timedelta
 
 # Garante que scripts/shared está no path para imports funcionarem
 _shared_dir = os.path.dirname(os.path.abspath(__file__))
@@ -126,8 +127,8 @@ def get_error_logs_filtered(
 ):
     """Retorna logs de erro filtrados por cliente, tipo, período."""
     try:
-        conditions = ["timestamp > NOW() - INTERVAL '%s days'"]
-        params = [days]
+        conditions = ["timestamp > NOW() - %s"]
+        params = [timedelta(days=days)]
 
         if client_id:
             conditions.append("client_id = %s")
@@ -178,8 +179,8 @@ def cleanup_old_errors(days: int = 30):
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM error_logs WHERE timestamp < NOW() - INTERVAL '%s days'",
-                    (days,),
+                    "DELETE FROM error_logs WHERE timestamp < NOW() - %s",
+                    (timedelta(days=days),),
                 )
                 deleted = cur.rowcount
                 logger.info(f"🗑️ {deleted} error logs antigos removidos (> {days} dias)")
@@ -282,11 +283,12 @@ def get_conversation_history(client_id: str, chat_id: str, limit: int = 50):
 def get_usage_report(days: int = 30):
     """Retorna relatório de uso agrupado por cliente e dia."""
     try:
+        interval = timedelta(days=days)
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT 
+                    SELECT
                         u.client_id,
                         c.name as client_name,
                         DATE(u.created_at) as dia,
@@ -298,11 +300,11 @@ def get_usage_report(days: int = 30):
                         SUM(u.cost_usd) as custo_usd
                     FROM usage_tracking u
                     LEFT JOIN clients c ON c.id = u.client_id
-                    WHERE u.created_at > NOW() - INTERVAL '%s days'
+                    WHERE u.created_at > NOW() - %s
                     GROUP BY u.client_id, c.name, dia
                     ORDER BY dia DESC, custo_usd DESC
                     """,
-                    (days,),
+                    (interval,),
                 )
                 return cur.fetchall()
     except Exception as e:
@@ -313,17 +315,18 @@ def get_usage_report(days: int = 30):
 def get_daily_cost_chart(days: int = 30):
     """Retorna custo total por dia para gráfico."""
     try:
+        interval = timedelta(days=days)
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT DATE(created_at) as dia, SUM(cost_usd) as custo
                     FROM usage_tracking
-                    WHERE created_at > NOW() - INTERVAL '%s days'
+                    WHERE created_at > NOW() - %s
                     GROUP BY dia
                     ORDER BY dia
                     """,
-                    (days,),
+                    (interval,),
                 )
                 return cur.fetchall()
     except Exception as e:
