@@ -47,7 +47,8 @@ else:
 
 # Global Pool variable
 _pool = None
-_table_initialized = False  # Flag para evitar chamadas repetidas
+_error_table_initialized = False
+_chat_table_initialized = False
 
 
 def get_connection():
@@ -610,8 +611,8 @@ def ensure_chat_messages_table():
     Cria a tabela de mensagens se não existir.
     LAZY INIT: Só executa uma vez quando realmente precisar.
     """
-    global _table_initialized
-    if _table_initialized:
+    global _chat_table_initialized
+    if _chat_table_initialized:
         return  # Já inicializado, não precisa fazer nada
 
     sql = """
@@ -630,7 +631,7 @@ def ensure_chat_messages_table():
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
-        _table_initialized = True
+        _chat_table_initialized = True
         logger.info("✅ Tabela chat_messages verificada/criada.")
     except Exception as e:
         logger.error(f"❌ Erro ao criar tabela chat_messages: {e}")
@@ -819,7 +820,123 @@ def log_error(
         logger.error(f"Erro Original: {error_msg}")
 
 
-# Initialize table logic on module load (safe chack)
-if not _table_initialized:
+# ============================================================================
+# METRICS / EVENT LOGGING (ADR-003)
+# ============================================================================
+
+
+def log_event(client_id: str, chat_id: str, event_type: str, event_data: dict = None):
+    """
+    Registra um evento de conversa no event log (append-only).
+    Custo: ~0ms extra (1 INSERT simples).
+
+    Args:
+        client_id: UUID do cliente
+        chat_id: ID da conversa
+        event_type: Tipo do evento (msg_received, ai_responded, human_takeover, etc.)
+        event_data: Dados extras do evento (opcional)
+    """
+    if not DB_URL or not client_id or not chat_id:
+        return
+
+    import json
+
+    try:
+        data_json = json.dumps(event_data or {})
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO conversation_events (client_id, chat_id, event_type, event_data)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (client_id, chat_id, event_type, data_json),
+                )
+    except Exception as e:
+        # Nunca deixa falha de métricas afetar o fluxo principal
+        logger.warning(f"⚠️ Falha ao registrar evento {event_type}: {e}")
+
+
+def get_metrics_daily(client_id: str, start_date=None, end_date=None) -> list:
+    """
+    Lê métricas pré-agregadas para o dashboard.
+    Query instantânea (<50ms) independente do volume de dados.
+
+    Args:
+        client_id: UUID do cliente
+        start_date: Data inicial (default: 30 dias atrás)
+        end_date: Data final (default: hoje)
+
+    Returns:
+        Lista de dicts com métricas diárias
+    """
+    if not DB_URL or not client_id:
+        return []
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                if start_date and end_date:
+                    cur.execute(
+                        """
+                        SELECT * FROM metrics_daily
+                        WHERE client_id = %s AND date BETWEEN %s AND %s
+                        ORDER BY date DESC
+                        """,
+                        (client_id, start_date, end_date),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT * FROM metrics_daily
+                        WHERE client_id = %s AND date >= CURRENT_DATE - INTERVAL '30 days'
+                        ORDER BY date DESC
+                        """,
+                        (client_id,),
+                    )
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar métricas: {e}")
+        return []
+
+
+def get_metrics_summary(client_id: str) -> dict:
+    """
+    Retorna resumo geral das métricas (últimos 30 dias).
+    Para exibir nos cards do dashboard.
+    """
+    if not DB_URL or not client_id:
+        return {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(total_conversations), 0) as total_conversations,
+                        COALESCE(SUM(total_messages_in), 0) as total_messages_in,
+                        COALESCE(SUM(total_messages_out), 0) as total_messages_out,
+                        COALESCE(SUM(resolved_by_ai), 0) as resolved_by_ai,
+                        COALESCE(SUM(resolved_by_human), 0) as resolved_by_human,
+                        COALESCE(SUM(human_takeovers), 0) as human_takeovers,
+                        COALESCE(AVG(avg_response_time_ms), 0)::int as avg_response_time_ms,
+                        COALESCE(SUM(followups_sent), 0) as followups_sent,
+                        COALESCE(SUM(followups_converted), 0) as followups_converted,
+                        COALESCE(SUM(total_cost_usd), 0) as total_cost_usd
+                    FROM metrics_daily
+                    WHERE client_id = %s AND date >= CURRENT_DATE - INTERVAL '30 days'
+                    """,
+                    (client_id,),
+                )
+                result = cur.fetchone()
+                return dict(result) if result else {}
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar resumo de métricas: {e}")
+        return {}
+
+
+# Initialize error_logs table on module load
+if not _error_table_initialized:
     init_error_log_table()
-    _table_initialized = True
+    _error_table_initialized = True

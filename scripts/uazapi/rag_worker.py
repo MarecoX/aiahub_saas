@@ -14,7 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
-from saas_db import get_client_config, get_connection, get_provider_config
+from saas_db import get_client_config, get_connection, get_provider_config, log_event
 from tools_library import get_enabled_tools
 
 # Configuração de Logs
@@ -411,6 +411,13 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                     f"📉 [TOOL OUTPUT] Retorno da ferramenta {msg.name}: {msg.content[:200]}..."
                 )
 
+        # Metrics: registra tools usadas
+        if found_tool_calls:
+            for msg in history_messages:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        log_event(str(client_config["id"]), chat_id, "tool_used", {"tool": tc.get("name", "unknown")})
+
         if not found_tool_calls:
             logger.info(
                 "🚫 [DEBUG FERRAMENTAS] O Agente NÃO tentou chamar nenhuma ferramenta nesta execução."
@@ -493,11 +500,9 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
 
         # --- TRACKING: Marca que a IA respondeu ---
         try:
-            from saas_db import get_connection as _gc
-
             _cid = client_config.get("id") if client_config else None
             if _cid and chat_id:
-                with _gc() as conn:
+                with get_connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
                             """
@@ -511,6 +516,10 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                         )
                         conn.commit()
                 logger.info(f"\U0001f916 Tracking: IA respondeu em {chat_id}")
+                # Metrics: registra resposta da IA
+                log_event(str(_cid), chat_id, "ai_responded", {
+                    "tokens": usage_data.get("openai", {}).get("total_tokens", 0) if usage_data else 0
+                })
         except Exception as e:
             logger.warning(f"\u26a0\ufe0f Erro ao trackear resposta IA: {e}")
         # ------------------------------------------------

@@ -1,6 +1,11 @@
-id: reminders
+id: metrics_aggregation
 namespace: company.team
-description: Processa lembretes pendentes a cada 5 minutos e envia via Uazapi com análise de contexto.
+description: "Agrega eventos de conversa em métricas diárias (ADR-003). Roda a cada 5 minutos."
+
+# Evita múltiplas execuções simultâneas
+concurrency:
+  limit: 1
+  behavior: CANCEL
 
 triggers:
   - id: every5min
@@ -8,13 +13,8 @@ triggers:
     cron: "*/5 * * * *"
     timezone: America/Sao_Paulo
 
-# Evita múltiplas execuções simultâneas
-concurrency:
-  limit: 1
-  behavior: CANCEL
-
 tasks:
-  - id: process_reminders
+  - id: aggregate_metrics
     type: io.kestra.plugin.scripts.python.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
@@ -23,14 +23,13 @@ tasks:
 
     namespaceFiles:
       enabled: true
-      include: [ "**" ]
+      include:
+        - "Kestra_2.0/scripts/shared/**"
 
     commands:
       - rm -f .env
       - export PYTHONPATH=$PYTHONPATH:.
-      - python Kestra_2.0/scripts/uazapi/reminder_worker.py
+      - python Kestra_2.0/scripts/shared/metrics_worker.py
 
     env:
-      REDIS_URL: "{{ kv('REDIS_URL') }}"
-      OPENAI_API_KEY: "{{ kv('OPENAI_API_KEY') }}"
       DATABASE_CONNECTION_URI: "{{ kv('DATABASE_URL') }}"

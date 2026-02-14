@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import httpx
 import logging
 from typing import Optional
@@ -701,6 +702,27 @@ def consultar_viabilidade_hubsoft(
             return {"viavel": False, "mensagem": msg}
 
         resultado = data.get("resultado", {})
+
+        # API pode retornar resultado como string em vez de dict
+        if isinstance(resultado, str):
+            try:
+                resultado = json.loads(resultado)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"⚠️ HubSoft: resultado veio como string: {resultado}")
+                return {
+                    "viavel": False,
+                    "mensagem": resultado or "Não foi possível consultar viabilidade neste endereço.",
+                    "endereco_consultado": f"{endereco}, {numero} - {bairro}, {cidade}/{estado}",
+                }
+
+        if not isinstance(resultado, dict):
+            logger.warning(f"⚠️ HubSoft: resultado com tipo inesperado: {type(resultado)}")
+            return {
+                "viavel": False,
+                "mensagem": "Resposta inesperada da API HubSoft ao consultar viabilidade.",
+                "endereco_consultado": f"{endereco}, {numero} - {bairro}, {cidade}/{estado}",
+            }
+
         projetos = resultado.get("projetos", [])
 
         if not projetos:

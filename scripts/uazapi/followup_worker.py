@@ -9,7 +9,7 @@ from google import genai
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
-from saas_db import get_connection, get_provider_config
+from saas_db import get_connection, get_provider_config, log_event
 from uazapi_saas import send_whatsapp_message, send_whatsapp_audio
 from config import REDIS_URL
 
@@ -331,8 +331,10 @@ async def check_and_run_followups():
                                     (chat_id, client_id),
                                 )
                                 conn.commit()
+                                # Metrics: conversa resolvida pela IA
+                                log_event(str(client_id), chat_id, "resolved", {"resolved_by": "ai"})
                                 # Conversa finalizada, não podemos continuar chain
-                                break 
+                                break
                             else:
                                 # Send Message
                                 clean_text = clean_message_content(resp_ai)
@@ -374,6 +376,9 @@ async def check_and_run_followups():
                             (current_stage_idx + 1, clean_text, chat_id, client_id),
                         )
                         conn.commit()
+
+                        # Metrics: registra followup enviado
+                        log_event(str(client_id), chat_id, "followup_sent", {"stage": current_stage_idx + 1})
 
                         # Update Local State for Chaining
                         # We advance to next stage
