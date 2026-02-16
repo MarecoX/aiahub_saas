@@ -32,6 +32,21 @@ except ImportError:
         return False
 
 
+def _sanitize_df(df):
+    """Converte tipos incompatíveis com Arrow/Altair (Decimal→float, UUID→str)."""
+    from decimal import Decimal as _Decimal
+
+    for col in df.columns:
+        if df[col].dtype == object:
+            sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+            if sample is not None:
+                if isinstance(sample, _Decimal):
+                    df[col] = df[col].apply(lambda x: float(x) if x is not None else None)
+                elif type(sample).__name__ == "UUID":
+                    df[col] = df[col].astype(str)
+    return df
+
+
 def render_admin_debug_tab():
     """Renderiza o painel completo de Debug & Alertas."""
 
@@ -67,7 +82,7 @@ def render_admin_debug_tab():
         # Gráfico de erros por hora
         if health["errors_by_hour"]:
             st.subheader("📈 Erros por Hora (Últimas 48h)")
-            df_errors = pd.DataFrame(health["errors_by_hour"])
+            df_errors = _sanitize_df(pd.DataFrame(health["errors_by_hour"]))
             df_errors["hora"] = pd.to_datetime(df_errors["hora"])
             df_errors = df_errors.set_index("hora")
             st.bar_chart(df_errors["total"])
@@ -77,7 +92,7 @@ def render_admin_debug_tab():
         # Top clientes com erros
         if health["top_error_clients"]:
             st.subheader("🔥 Top Clientes com Erros (24h)")
-            df_top = pd.DataFrame(health["top_error_clients"])
+            df_top = _sanitize_df(pd.DataFrame(health["top_error_clients"]))
             st.dataframe(
                 df_top,
                 column_config={
@@ -85,7 +100,7 @@ def render_admin_debug_tab():
                     "error_count": st.column_config.NumberColumn("Erros", format="%d"),
                 },
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
 
     # =========================================================

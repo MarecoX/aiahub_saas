@@ -22,6 +22,21 @@ except ImportError:
     gemini_manager = None
 
 
+def _sanitize_df(df):
+    """Converte tipos incompatíveis com Arrow/Altair (Decimal→float, UUID→str)."""
+    from decimal import Decimal as _Decimal
+
+    for col in df.columns:
+        if df[col].dtype == object:
+            sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+            if sample is not None:
+                if isinstance(sample, _Decimal):
+                    df[col] = df[col].apply(lambda x: float(x) if x is not None else None)
+                elif type(sample).__name__ == "UUID":
+                    df[col] = df[col].astype(str)
+    return df
+
+
 def render_admin_view():
     st.title("🏭 Kestra SaaS | Painel Admin")
     st.caption(f"Logado como: {st.session_state.get('user_name', 'Admin')}")
@@ -107,9 +122,7 @@ def render_admin_view():
                     )
                     rows = cur.fetchall()
                     if rows:
-                        df = pd.DataFrame(rows)
-                        if "id" in df.columns:
-                            df["id"] = df["id"].astype(str)
+                        df = _sanitize_df(pd.DataFrame(rows))
 
                         # Fix: Converte tools_config para string para evitar ArrowInvalid
                         if "tools_config" in df.columns:
@@ -411,7 +424,7 @@ def render_admin_view():
                     rows = cur.fetchall()
 
                     if rows:
-                        df_attend = pd.DataFrame(rows)
+                        df_attend = _sanitize_df(pd.DataFrame(rows))
 
                         total_aguardando = int(df_attend["aguardando_resposta"].sum())
                         total_humano = int(df_attend["atendidos_humano"].sum())
@@ -434,7 +447,7 @@ def render_admin_view():
                             pc2.metric("👤 % Humano", f"{pct_humano:.1f}%")
                             pc3.metric("🔴 % Aguardando", f"{pct_aguardando:.1f}%")
 
-                        st.dataframe(df_attend, use_container_width=True)
+                        st.dataframe(df_attend, width="stretch")
                     else:
                         st.info("Nenhuma conversa ativa nas últimas 24h.")
         except Exception as e:
@@ -484,7 +497,7 @@ def render_admin_view():
                     chart_rows = cur.fetchall()
 
                     if chart_rows:
-                        df_chart = pd.DataFrame(chart_rows)
+                        df_chart = _sanitize_df(pd.DataFrame(chart_rows))
                         df_chart["dia"] = pd.to_datetime(df_chart["dia"])
                         df_chart = df_chart.set_index("dia")
                         st.line_chart(df_chart[["custo_usd", "custo_brl"]])
@@ -549,8 +562,8 @@ def render_admin_view():
                         )
                     rows = cur.fetchall()
                     if rows:
-                        df_usage = pd.DataFrame(rows)
-                        st.dataframe(df_usage, use_container_width=True)
+                        df_usage = _sanitize_df(pd.DataFrame(rows))
+                        st.dataframe(df_usage, width="stretch")
 
                         # Gráfico de barras por cliente
                         if len(df_usage) > 1:
@@ -616,7 +629,7 @@ def render_admin_view():
                     detail_rows = cur.fetchall()
 
                     if detail_rows:
-                        df_detail = pd.DataFrame(detail_rows)
+                        df_detail = _sanitize_df(pd.DataFrame(detail_rows))
                         st.dataframe(
                             df_detail,
                             column_config={
@@ -647,7 +660,7 @@ def render_admin_view():
                                 ),
                             },
                             hide_index=True,
-                            use_container_width=True,
+                            width="stretch",
                         )
                     else:
                         st.info("Nenhum detalhe diário no período.")
@@ -791,7 +804,7 @@ def render_admin_view():
                     metric_rows = cur.fetchall()
 
                     if metric_rows:
-                        df_metrics = pd.DataFrame(metric_rows)
+                        df_metrics = _sanitize_df(pd.DataFrame(metric_rows))
 
                         # Cards globais
                         avg_resp = df_metrics["media_resposta_ms"].mean()
@@ -872,7 +885,7 @@ def render_admin_view():
                                 ),
                             },
                             hide_index=True,
-                            use_container_width=True,
+                            width="stretch",
                         )
 
                         # Gráfico de tempo de resposta por dia
@@ -914,7 +927,7 @@ def render_admin_view():
                         daily_metrics = cur.fetchall()
 
                         if daily_metrics:
-                            df_dm = pd.DataFrame(daily_metrics)
+                            df_dm = _sanitize_df(pd.DataFrame(daily_metrics))
                             df_dm["dia"] = pd.to_datetime(df_dm["dia"])
                             df_dm = df_dm.set_index("dia")
                             st.line_chart(
@@ -975,7 +988,7 @@ def render_admin_view():
                     tool_rows = cur.fetchall()
 
                     if tool_rows:
-                        df_tools = pd.DataFrame(tool_rows)
+                        df_tools = _sanitize_df(pd.DataFrame(tool_rows))
                         st.dataframe(
                             df_tools,
                             column_config={
@@ -988,7 +1001,7 @@ def render_admin_view():
                                 ),
                             },
                             hide_index=True,
-                            use_container_width=True,
+                            width="stretch",
                         )
                         if len(df_tools) > 1:
                             st.bar_chart(df_tools.set_index("ferramenta")["total_usos"])
@@ -1038,7 +1051,7 @@ def render_admin_view():
                     event_rows = cur.fetchall()
 
                     if event_rows:
-                        df_events = pd.DataFrame(event_rows)
+                        df_events = _sanitize_df(pd.DataFrame(event_rows))
 
                         # Mapear nomes legíveis
                         event_labels = {
@@ -1066,7 +1079,7 @@ def render_admin_view():
                                     ),
                                 },
                                 hide_index=True,
-                                use_container_width=True,
+                                width="stretch",
                             )
                         with ev2:
                             st.bar_chart(df_events.set_index("evento")["total"])
