@@ -111,6 +111,20 @@ class ToolsConfigUpdate(BaseModel):
     custom_tools: Optional[list] = None  # List of JSON Tool Definitions
 
 
+class ToolUpdate(BaseModel):
+    """Atualiza uma tool individual do cliente."""
+
+    active: bool = Field(..., description="Se a tool está ativa ou não")
+    config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Configuração da tool (credenciais, parâmetros). Os campos variam por tool — consulte GET /tools/catalog",
+    )
+    instructions: Optional[str] = Field(
+        None,
+        description="Instruções customizadas para a IA (quando has_instructions=true no catálogo)",
+    )
+
+
 class OAuthCode(BaseModel):
     code: str
     client_id: str = Field(
