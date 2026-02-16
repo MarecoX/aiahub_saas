@@ -340,10 +340,14 @@ def enviar_relatorio(
     uazapi_url: str = None,
     uazapi_token: str = None,
     template: str = None,
+    provider_type: str = None,
+    provider_config: dict = None,
+    client_id: str = None,
 ):
     """
     Envia um relatório (ficha, reserva, pedido) para um grupo do WhatsApp.
     Use quando o cliente confirmar interesse, fechar pedido ou reservar produto.
+    Suporta múltiplos providers (Uazapi, LancePilot, Meta) via camada unificada.
     Args:
         tipo (str): Tipo do relatório ("ficha", "reserva", "pedido", etc.)
         dados (dict): Dados coletados (nome, telefone, produto, valor, etc.)
@@ -354,10 +358,11 @@ def enviar_relatorio(
     missing = []
     if not grupo_id:
         missing.append("grupo_id")
-    if not uazapi_url:
-        missing.append("uazapi_url")
-    if not uazapi_token:
-        missing.append("uazapi_token")
+    # Valida credenciais: aceita unified OU legacy
+    has_unified = provider_type and provider_config
+    has_legacy = uazapi_url and uazapi_token
+    if not has_unified and not has_legacy:
+        missing.append("credenciais do provider (url/token)")
     if missing:
         logger.warning(
             f"⚠️ Configuração incompleta: {', '.join(missing)}. Relatório não enviado."
@@ -381,8 +386,19 @@ def enviar_relatorio(
             linhas.append(f"• {key}: {val}")
         msg = "\n".join(linhas)
 
-    # Envia via Uazapi (ASYNC - mesmo padrão do whatsapp_sender que funciona)
+    # Envia via sender unificado (suporta todos os providers)
     async def _send():
+        from scripts.shared.whatsapp_sender_unified import send_text
+        return await send_text(
+            client_id=client_id or "",
+            to=grupo_id,
+            text=msg,
+            provider_type=provider_type,
+            provider_config=provider_config,
+        )
+
+    # Fallback legacy: se só tem uazapi_url/token (retrocompatibilidade)
+    async def _send_legacy():
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{uazapi_url}/send/text",
@@ -390,16 +406,25 @@ def enviar_relatorio(
                 headers={"token": uazapi_token},
                 timeout=30.0,
             )
-            return resp
+            if resp.status_code in [200, 201]:
+                return {"status": "sent", "provider": "uazapi"}
+            else:
+                return {"error": f"HTTP {resp.status_code}", "body": resp.text}
 
     try:
-        resp = asyncio.run(_send())
-        if resp.status_code in [200, 201]:
-            logger.info(f"✅ Relatório enviado para grupo {grupo_id}")
+        if has_unified:
+            result = asyncio.run(_send())
+        else:
+            result = asyncio.run(_send_legacy())
+
+        if result.get("status") == "sent":
+            provider_name = result.get("provider", "whatsapp")
+            logger.info(f"✅ Relatório enviado para {grupo_id} via {provider_name}")
             return "SUCESSO: Relatório enviado. AÇÃO CONCLUÍDA. NÃO chame esta ferramenta novamente. Apenas responda ao usuário confirmando."
         else:
-            logger.error(f"❌ Erro Uazapi: {resp.status_code} - {resp.text}")
-            return f"Erro ao enviar relatório: {resp.status_code}"
+            error = result.get("error", "Erro desconhecido")
+            logger.error(f"❌ Erro envio relatório: {error}")
+            return f"Erro ao enviar relatório: {error}"
     except Exception as e:
         logger.error(f"Erro enviar_relatorio: {e}")
         return f"Erro ao enviar: {e}"
@@ -1042,53 +1067,35 @@ def get_enabled_tools(
     """
     tools = []
 
+    # Resolve provider e credenciais via camada unificada
+    resolved_provider_type = ""
+    resolved_provider_config = {}
+    client_id_str = ""
+
+    # Mantém variáveis legadas para retrocompatibilidade com outras tools
     uazapi_url_cfg = ""
     uazapi_token_cfg = ""
 
     if client_config:
-        # Resolve WhatsApp provider credentials dynamically
-        client_id = str(client_config.get("id"))
+        client_id_str = str(client_config.get("id", ""))
         try:
-            from scripts.shared.saas_db import get_provider_config, get_default_provider
+            from scripts.shared.whatsapp_sender_unified import resolve_provider
 
-            # 1. Try provider matching client's whatsapp_provider setting
-            wp = client_config.get("whatsapp_provider", "")
-            if wp:
-                provider_cfg = get_provider_config(client_id, wp)
-                if provider_cfg:
-                    uazapi_url_cfg = provider_cfg.get("url", "")
-                    uazapi_token_cfg = provider_cfg.get("token", "")
-                    logger.info(
-                        f"🔄 Credenciais carregadas do provider '{wp}' para cliente {client_id}"
-                    )
+            resolved_provider_type, resolved_provider_config = resolve_provider(
+                client_id_str, client_config
+            )
+            logger.info(
+                f"🔗 Provider resolvido: {resolved_provider_type} para cliente {client_id_str}"
+            )
 
-            # 2. Fallback: try default provider
-            if not uazapi_url_cfg or not uazapi_token_cfg:
-                def_type, def_cfg = get_default_provider(client_id)
-                if def_cfg:
-                    uazapi_url_cfg = uazapi_url_cfg or def_cfg.get("url", "")
-                    uazapi_token_cfg = uazapi_token_cfg or def_cfg.get("token", "")
-                    if uazapi_url_cfg and uazapi_token_cfg:
-                        logger.info(
-                            f"🔄 Credenciais carregadas do default provider '{def_type}' para cliente {client_id}"
-                        )
-
-            # 3. Fallback: try legacy uazapi provider explicitly
-            if not uazapi_url_cfg or not uazapi_token_cfg:
-                provider_cfg = get_provider_config(client_id, "uazapi")
-                if provider_cfg:
-                    uazapi_url_cfg = uazapi_url_cfg or provider_cfg.get("url", "")
-                    uazapi_token_cfg = uazapi_token_cfg or provider_cfg.get("token", "")
-
-            # 4. Fallback: use client's api_url and token fields
-            if not uazapi_url_cfg:
-                uazapi_url_cfg = client_config.get("api_url", "")
-            if not uazapi_token_cfg:
-                uazapi_token_cfg = client_config.get("token", "")
+            # Popula variáveis legadas para tools que ainda dependem delas
+            if resolved_provider_type == "uazapi":
+                uazapi_url_cfg = resolved_provider_config.get("url", "")
+                uazapi_token_cfg = resolved_provider_config.get("token", "")
         except Exception as e:
-            logger.debug(f"ℹ️ Busca de provider no banco pulada ou falhou: {e}")
+            logger.debug(f"ℹ️ Resolução de provider falhou, usando fallback: {e}")
 
-    # Fallback para Env se banco estiver vazio
+    # Fallback para Env se resolução falhou
     if not uazapi_url_cfg:
         uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
     if not uazapi_token_cfg:
@@ -1275,8 +1282,7 @@ def get_enabled_tools(
                         else "nome, cpf, email, telefone, etc."
                     )
 
-                    # Uazapi configs já inicializadas no topo da função get_enabled_tools
-                    # Uazapi configs já carregadas no topo da função
+                    # Provider configs resolvidos no topo da função via resolve_provider
 
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
@@ -1291,7 +1297,7 @@ def get_enabled_tools(
 
                     # 2. Wrapper que aceita **kwargs dinâmicos
                     def create_relatorio_wrapper(
-                        f, grp, url, tkn, tpl, telefone_auto, known_fields
+                        f, grp, p_type, p_config, c_id, url, tkn, tpl, telefone_auto, known_fields
                     ):
                         def wrapped_relatorio(tipo: str = "ficha", **kwargs):
                             """Envia um relatório para o grupo de vendas no WhatsApp."""
@@ -1362,12 +1368,15 @@ def get_enabled_tools(
                                 return "AÇÃO CANCELADA: Ainda não há dados suficientes para enviar relatório. NÃO tente novamente agora. Continue a conversa normalmente e colete as informações necessárias primeiro."
 
                             logger.info(
-                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}"
+                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}, provider={p_type}"
                             )
                             response_msg = f(
                                 tipo=tipo,
                                 dados=dados_final,
                                 grupo_id=grp,
+                                provider_type=p_type,
+                                provider_config=p_config,
+                                client_id=c_id,
                                 uazapi_url=url,
                                 uazapi_token=tkn,
                                 template=tpl,
@@ -1414,6 +1423,9 @@ def get_enabled_tools(
                             func=create_relatorio_wrapper(
                                 fn_captured,
                                 grupo_cfg,
+                                resolved_provider_type,
+                                resolved_provider_config,
+                                client_id_str,
                                 uazapi_url_cfg,
                                 uazapi_token_cfg,
                                 template_cfg,
@@ -1428,7 +1440,7 @@ Campos esperados: {placeholders_str}""",
                         )
                     )
                     logger.info(
-                        f"🔧 Tool Enviar Relatório Dinâmica: grupo={grupo_cfg[:20]}... | Campos detectados: {placeholders_str}"
+                        f"🔧 Tool Enviar Relatório Dinâmica: grupo={grupo_cfg[:20]}... | provider={resolved_provider_type} | Campos: {placeholders_str}"
                     )
 
                 elif tool_name == "cal_dot_com":
