@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 import shutil
 import os
 import logging
-from api.models import ClientCreate, ClientUpdate, ToolsConfigUpdate
+from api.models import ClientCreate, ClientUpdate, ToolsConfigUpdate, ToolUpdate
 from api.dependencies import verify_token
 from saas_db import (
     create_client_db,
@@ -148,11 +148,154 @@ def update_client(token: str, update_data: ClientUpdate):
     return {"message": "Cliente atualizado"}
 
 
-@router.put("/{token}/tools")
-def update_client_tools(token: str, tools_update: ToolsConfigUpdate):
+@router.get("/tools/catalog", response_model=Dict[str, Any])
+def list_tools_catalog(business_type: str = "generic"):
     """
-    Atualiza configuração de ferramentas (LancePilot, etc).
-    Faz merge com o config existente.
+    Retorna o catálogo completo de tools disponíveis, filtrado por business_type.
+
+    Cada tool inclui: label, category, config_fields (campos de credencial/config),
+    credential_source, provider_badge, etc.
+
+    Query params:
+        business_type: Filtra tools aplicáveis ao tipo de negócio (default: generic)
+    """
+    from scripts.shared.tool_registry import TOOL_REGISTRY, get_tools_for_business_type, BUSINESS_TYPES
+
+    filtered = get_tools_for_business_type(business_type)
+
+    return {
+        "business_types": BUSINESS_TYPES,
+        "current_filter": business_type,
+        "tools": {
+            tool_id: {
+                "label": meta.get("label", tool_id),
+                "category": meta.get("category", "generic"),
+                "applicable_to": meta.get("applicable_to", ["*"]),
+                "config_fields": meta.get("config_fields", {}),
+                "has_instructions": meta.get("has_instructions", False),
+                "credential_source": meta.get("credential_source"),
+                "provider_badge": meta.get("provider_badge", ""),
+                "ui_help": meta.get("ui_help", ""),
+                "ui_caption": meta.get("ui_caption", ""),
+                "instructions_placeholder": meta.get("instructions_placeholder", ""),
+            }
+            for tool_id, meta in filtered.items()
+        },
+        "total": len(filtered),
+    }
+
+
+@router.get("/{token}/tools")
+def get_client_tools(token: str):
+    """
+    Retorna as tools configuradas para um cliente, com o catálogo mesclado.
+
+    Para cada tool do catálogo, retorna se está ativa e sua config atual.
+    """
+    from scripts.shared.tool_registry import get_tools_for_business_type
+
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    business_type = client.get("business_type", "generic")
+    catalog = get_tools_for_business_type(business_type)
+    current_tools = client.get("tools_config") or {}
+
+    result = {}
+    for tool_id, meta in catalog.items():
+        tool_config = current_tools.get(tool_id)
+        is_active = False
+        config_data = {}
+
+        if isinstance(tool_config, bool):
+            is_active = tool_config
+        elif isinstance(tool_config, dict):
+            is_active = tool_config.get("active", False)
+            config_data = {k: v for k, v in tool_config.items() if k != "active"}
+
+        result[tool_id] = {
+            "label": meta.get("label", tool_id),
+            "category": meta.get("category"),
+            "is_active": is_active,
+            "config": config_data,
+            "config_fields": meta.get("config_fields", {}),
+            "has_instructions": meta.get("has_instructions", False),
+            "credential_source": meta.get("credential_source"),
+            "provider_badge": meta.get("provider_badge", ""),
+        }
+
+    return result
+
+
+@router.put("/{token}/tools/{tool_id}")
+def update_client_tool(token: str, tool_id: str, tool_update: ToolUpdate):
+    """
+    Ativa/desativa e configura uma tool individual do cliente.
+
+    O `tool_id` deve ser um ID válido do catálogo (ex: consultar_cep, enviar_relatorio, cal_dot_com).
+    Consulte `GET /tools/catalog` para ver os IDs e campos de cada tool.
+
+    Exemplo — ativar HubSoft:
+    ```json
+    PUT /api/v1/clients/{token}/tools/consultar_viabilidade_hubsoft
+    {
+        "active": true,
+        "config": {
+            "api_url": "https://api.provedor.hubsoft.com.br",
+            "client_id": "abc",
+            "client_secret": "xyz",
+            "username": "user@email.com",
+            "password": "senha"
+        }
+    }
+    ```
+    """
+    from scripts.shared.tool_registry import TOOL_REGISTRY
+
+    # Valida se tool existe no catálogo
+    if tool_id not in TOOL_REGISTRY:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tool '{tool_id}' não existe. Use GET /tools/catalog para ver as disponíveis.",
+        )
+
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    current_tools = client.get("tools_config") or {}
+    registry_entry = TOOL_REGISTRY[tool_id]
+
+    # Monta o valor da tool no tools_config
+    if not tool_update.config and not tool_update.instructions:
+        # Tool simples (só active: true/false)
+        current_tools[tool_id] = tool_update.active
+    else:
+        # Tool com config
+        tool_data = {"active": tool_update.active}
+        if tool_update.config:
+            tool_data.update(tool_update.config)
+        if tool_update.instructions and registry_entry.get("has_instructions"):
+            tool_data["instructions"] = tool_update.instructions
+        current_tools[tool_id] = tool_data
+
+    success = update_tools_config_db(client["id"], current_tools)
+    if not success:
+        raise HTTPException(status_code=500, detail="Falha ao salvar tools_config")
+
+    return {
+        "message": f"Tool '{tool_id}' {'ativada' if tool_update.active else 'desativada'}",
+        "tool_id": tool_id,
+        "config": current_tools[tool_id],
+    }
+
+
+@router.put("/{token}/tools")
+def update_client_tools_bulk(token: str, tools_update: ToolsConfigUpdate):
+    """
+    (Legado) Atualiza múltiplas tools de uma vez.
+    Prefira PUT /{token}/tools/{tool_id} para atualizar individualmente.
     """
     client = get_client_config(token)
     if not client:
@@ -160,22 +303,14 @@ def update_client_tools(token: str, tools_update: ToolsConfigUpdate):
 
     current_tools = client.get("tools_config") or {}
 
-    # Atualiza LancePilot se enviado
     if tools_update.lancepilot:
         current_tools["lancepilot"] = tools_update.lancepilot.model_dump()
-
-    # Generic Tools
     if tools_update.consultar_cep is not None:
         current_tools["consultar_cep"] = tools_update.consultar_cep
-
     if tools_update.atendimento_humano is not None:
         current_tools["atendimento_humano"] = tools_update.atendimento_humano
-
-    # Follow-Up (Loop)
     if tools_update.followup is not None:
         current_tools["followup"] = tools_update.followup
-
-    # Custom Tools (Make-like)
     if tools_update.custom_tools is not None:
         current_tools["custom_tools"] = tools_update.custom_tools
 
