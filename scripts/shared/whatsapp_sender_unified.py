@@ -17,9 +17,11 @@ Uso:
 import httpx
 import logging
 import os
-from typing import Optional, Tuple
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
+
+META_API_VERSION = "v23.0"
 
 
 def resolve_provider(client_id: str, client_config: dict = None) -> Tuple[str, dict]:
@@ -36,9 +38,6 @@ def resolve_provider(client_id: str, client_config: dict = None) -> Tuple[str, d
         (provider_type, config) ex: ("uazapi", {"url": "...", "token": "..."})
     """
     from scripts.shared.saas_db import get_provider_config, get_default_provider
-
-    provider_type = None
-    config = {}
 
     if not client_id:
         return ("uazapi", _fallback_env())
@@ -73,7 +72,6 @@ def resolve_provider(client_id: str, client_config: dict = None) -> Tuple[str, d
                 logger.info("🔗 Provider resolvido via colunas legadas (clients table)")
                 return ("uazapi", {"url": legacy_url, "token": legacy_token})
 
-            # LancePilot legacy
             lp_token = client_config.get("lancepilot_token", "")
             lp_workspace = client_config.get("lancepilot_workspace_id", "")
             if lp_token and lp_workspace:
@@ -110,6 +108,16 @@ def _fallback_env() -> dict:
     }
 
 
+def _clean_phone(raw: str) -> str:
+    """Limpa e valida número de telefone. Remove @s.whatsapp.net e caracteres extras."""
+    if not raw:
+        return ""
+    cleaned = str(raw).split("@")[0].strip()
+    # Remove tudo que não é dígito ou + (para DDI)
+    digits = "".join(c for c in cleaned if c.isdigit())
+    return digits
+
+
 async def send_text(
     client_id: str,
     to: str,
@@ -123,21 +131,25 @@ async def send_text(
 
     Args:
         client_id: UUID do cliente
-        to: Número de destino (com DDI, ex: "5511999999999" ou "5511999999999@s.whatsapp.net")
+        to: Número de destino (ex: "5511999999999" ou "5511999999999@s.whatsapp.net")
         text: Texto da mensagem
         client_config: Config completa do cliente (opcional, evita query extra)
         provider_type: Força um provider específico (opcional)
         provider_config: Força config específica (opcional)
 
     Returns:
-        dict com resultado do envio
+        dict com {"status": "sent", "provider": "..."} ou {"error": "..."}
     """
+    # Validação de entrada
+    to_clean = _clean_phone(to)
+    if not to_clean:
+        return {"error": "Destinatário inválido ou vazio"}
+    if not text or not text.strip():
+        return {"error": "Texto da mensagem vazio"}
+
     # Resolve provider se não fornecido
     if not provider_type or not provider_config:
         provider_type, provider_config = resolve_provider(client_id, client_config)
-
-    # Limpa número (remove @s.whatsapp.net se presente)
-    to_clean = str(to).split("@")[0] if "@" in str(to) else str(to)
 
     logger.info(f"📤 Enviando via {provider_type} para {to_clean[:6]}...")
 
@@ -148,7 +160,6 @@ async def send_text(
     elif provider_type == "meta":
         return await _send_meta(provider_config, to_clean, text)
     else:
-        logger.error(f"❌ Provider desconhecido: {provider_type}")
         return {"error": f"Provider desconhecido: {provider_type}"}
 
 
@@ -160,19 +171,26 @@ async def _send_uazapi(config: dict, to: str, text: str) -> dict:
     if not url or not token:
         return {"error": "Credenciais Uazapi ausentes (url/token)"}
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{url}/send/text",
-            json={"number": to, "text": text},
-            headers={"token": token},
-            timeout=30.0,
-        )
-        if resp.status_code in [200, 201]:
-            logger.info(f"✅ [Uazapi] Mensagem enviada para {to[:6]}...")
-            return {"status": "sent", "provider": "uazapi", "response": resp.json()}
-        else:
-            logger.error(f"❌ [Uazapi] Erro: {resp.status_code} - {resp.text}")
-            return {"error": f"Uazapi HTTP {resp.status_code}", "body": resp.text}
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{url}/send/text",
+                json={"number": to, "text": text},
+                headers={"token": token},
+                timeout=30.0,
+            )
+            if resp.status_code in [200, 201]:
+                logger.info(f"✅ [Uazapi] Mensagem enviada para {to[:6]}...")
+                return {"status": "sent", "provider": "uazapi"}
+            else:
+                logger.error(f"❌ [Uazapi] Erro: {resp.status_code} - {resp.text}")
+                return {"error": f"Uazapi HTTP {resp.status_code}", "body": resp.text}
+    except httpx.TimeoutException:
+        logger.error(f"❌ [Uazapi] Timeout ao enviar para {to[:6]}")
+        return {"error": "Uazapi timeout"}
+    except httpx.HTTPError as e:
+        logger.error(f"❌ [Uazapi] Erro HTTP: {e}")
+        return {"error": f"Uazapi HTTP error: {e}"}
 
 
 async def _send_lancepilot(config: dict, to: str, text: str) -> dict:
@@ -183,26 +201,32 @@ async def _send_lancepilot(config: dict, to: str, text: str) -> dict:
     if not token or not workspace_id:
         return {"error": "Credenciais LancePilot ausentes (token/workspace_id)"}
 
-    lp_base = "https://lancepilot.com/api/v3"
-    lp_url = f"{lp_base}/workspaces/{workspace_id}/contacts/number/{to}/messages/text"
+    lp_url = f"https://lancepilot.com/api/v3/workspaces/{workspace_id}/contacts/number/{to}/messages/text"
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            lp_url,
-            json={"text": {"body": text}},
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            timeout=15.0,
-        )
-        if resp.status_code in [200, 201]:
-            logger.info(f"✅ [LancePilot] Mensagem enviada para {to[:6]}...")
-            return {"status": "sent", "provider": "lancepilot", "response": resp.json()}
-        else:
-            logger.error(f"❌ [LancePilot] Erro: {resp.status_code} - {resp.text}")
-            return {"error": f"LancePilot HTTP {resp.status_code}", "body": resp.text}
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                lp_url,
+                json={"text": {"body": text}},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=15.0,
+            )
+            if resp.status_code in [200, 201]:
+                logger.info(f"✅ [LancePilot] Mensagem enviada para {to[:6]}...")
+                return {"status": "sent", "provider": "lancepilot"}
+            else:
+                logger.error(f"❌ [LancePilot] Erro: {resp.status_code} - {resp.text}")
+                return {"error": f"LancePilot HTTP {resp.status_code}", "body": resp.text}
+    except httpx.TimeoutException:
+        logger.error(f"❌ [LancePilot] Timeout ao enviar para {to[:6]}")
+        return {"error": "LancePilot timeout"}
+    except httpx.HTTPError as e:
+        logger.error(f"❌ [LancePilot] Erro HTTP: {e}")
+        return {"error": f"LancePilot HTTP error: {e}"}
 
 
 async def _send_meta(config: dict, to: str, text: str) -> dict:
@@ -213,27 +237,34 @@ async def _send_meta(config: dict, to: str, text: str) -> dict:
     if not access_token or not phone_id:
         return {"error": "Credenciais Meta ausentes (access_token/phone_id)"}
 
-    meta_url = f"https://graph.facebook.com/v23.0/{phone_id}/messages"
+    meta_url = f"https://graph.facebook.com/{META_API_VERSION}/{phone_id}/messages"
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            meta_url,
-            json={
-                "messaging_product": "whatsapp",
-                "recipient_type": "individual",
-                "to": to,
-                "type": "text",
-                "text": {"body": text},
-            },
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            timeout=15.0,
-        )
-        if resp.status_code in [200, 201]:
-            logger.info(f"✅ [Meta] Mensagem enviada para {to[:6]}...")
-            return {"status": "sent", "provider": "meta", "response": resp.json()}
-        else:
-            logger.error(f"❌ [Meta] Erro: {resp.status_code} - {resp.text}")
-            return {"error": f"Meta HTTP {resp.status_code}", "body": resp.text}
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                meta_url,
+                json={
+                    "messaging_product": "whatsapp",
+                    "recipient_type": "individual",
+                    "to": to,
+                    "type": "text",
+                    "text": {"body": text},
+                },
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=15.0,
+            )
+            if resp.status_code in [200, 201]:
+                logger.info(f"✅ [Meta] Mensagem enviada para {to[:6]}...")
+                return {"status": "sent", "provider": "meta"}
+            else:
+                logger.error(f"❌ [Meta] Erro: {resp.status_code} - {resp.text}")
+                return {"error": f"Meta HTTP {resp.status_code}", "body": resp.text}
+    except httpx.TimeoutException:
+        logger.error(f"❌ [Meta] Timeout ao enviar para {to[:6]}")
+        return {"error": "Meta timeout"}
+    except httpx.HTTPError as e:
+        logger.error(f"❌ [Meta] Erro HTTP: {e}")
+        return {"error": f"Meta HTTP error: {e}"}
