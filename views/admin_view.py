@@ -5,6 +5,7 @@ import json
 import uuid
 import os
 import sys
+import subprocess
 
 # Adiciona diretório raiz ao path para imports funcionarem
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,73 @@ def render_admin_view():
     if st.button("Sair"):
         st.session_state.clear()
         st.rerun()
+
+    # --- BARRA DE ATUALIZAÇÃO (Git Pull / Push) ---
+    _repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    with st.expander("🔄 Atualização do Sistema (Git)", expanded=False):
+        gc1, gc2, gc3 = st.columns([1, 1, 2])
+
+        with gc1:
+            if st.button("📥 Git Pull (Atualizar)", key="git_pull_btn"):
+                try:
+                    result = subprocess.run(
+                        ["git", "pull", "--ff-only"],
+                        cwd=_repo_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if result.returncode == 0:
+                        st.success(f"✅ Atualizado!\n```\n{result.stdout}\n```")
+                    else:
+                        st.error(f"❌ Erro no pull:\n```\n{result.stderr}\n```")
+                except subprocess.TimeoutExpired:
+                    st.error("⏰ Timeout: o pull demorou mais de 30s.")
+                except Exception as e:
+                    st.error(f"❌ Erro: {e}")
+
+        with gc2:
+            if st.button("📊 Git Status", key="git_status_btn"):
+                try:
+                    # Branch atual
+                    branch = subprocess.run(
+                        ["git", "branch", "--show-current"],
+                        cwd=_repo_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    # Status
+                    status = subprocess.run(
+                        ["git", "status", "--short"],
+                        cwd=_repo_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    # Último commit
+                    log = subprocess.run(
+                        ["git", "log", "--oneline", "-3"],
+                        cwd=_repo_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    st.info(f"**Branch:** `{branch.stdout.strip()}`")
+                    if status.stdout.strip():
+                        st.warning(f"**Alterações pendentes:**\n```\n{status.stdout}\n```")
+                    else:
+                        st.success("✅ Nenhuma alteração pendente.")
+                    st.code(log.stdout, language="text")
+                except Exception as e:
+                    st.error(f"❌ Erro: {e}")
+
+        with gc3:
+            st.caption(
+                "📥 **Pull** atualiza o código do GitHub.\n\n"
+                "⚠️ Após o pull, reinicie o Streamlit para aplicar mudanças."
+            )
 
     # --- FUNÇÕES DE BD (Simplificadas aqui ou importadas) ---
     def list_clients():
