@@ -148,6 +148,86 @@ def update_client(token: str, update_data: ClientUpdate):
     return {"message": "Cliente atualizado"}
 
 
+@router.get("/tools/catalog", response_model=Dict[str, Any])
+def list_tools_catalog(business_type: str = "generic"):
+    """
+    Retorna o catálogo completo de tools disponíveis, filtrado por business_type.
+
+    Cada tool inclui: label, category, config_fields (campos de credencial/config),
+    credential_source, provider_badge, etc.
+
+    Query params:
+        business_type: Filtra tools aplicáveis ao tipo de negócio (default: generic)
+    """
+    from scripts.shared.tool_registry import TOOL_REGISTRY, get_tools_for_business_type, BUSINESS_TYPES
+
+    filtered = get_tools_for_business_type(business_type)
+
+    return {
+        "business_types": BUSINESS_TYPES,
+        "current_filter": business_type,
+        "tools": {
+            tool_id: {
+                "label": meta.get("label", tool_id),
+                "category": meta.get("category", "generic"),
+                "applicable_to": meta.get("applicable_to", ["*"]),
+                "config_fields": meta.get("config_fields", {}),
+                "has_instructions": meta.get("has_instructions", False),
+                "credential_source": meta.get("credential_source"),
+                "provider_badge": meta.get("provider_badge", ""),
+                "ui_help": meta.get("ui_help", ""),
+                "ui_caption": meta.get("ui_caption", ""),
+                "instructions_placeholder": meta.get("instructions_placeholder", ""),
+            }
+            for tool_id, meta in filtered.items()
+        },
+        "total": len(filtered),
+    }
+
+
+@router.get("/{token}/tools")
+def get_client_tools(token: str):
+    """
+    Retorna as tools configuradas para um cliente, com o catálogo mesclado.
+
+    Para cada tool do catálogo, retorna se está ativa e sua config atual.
+    """
+    from scripts.shared.tool_registry import get_tools_for_business_type
+
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    business_type = client.get("business_type", "generic")
+    catalog = get_tools_for_business_type(business_type)
+    current_tools = client.get("tools_config") or {}
+
+    result = {}
+    for tool_id, meta in catalog.items():
+        tool_config = current_tools.get(tool_id)
+        is_active = False
+        config_data = {}
+
+        if isinstance(tool_config, bool):
+            is_active = tool_config
+        elif isinstance(tool_config, dict):
+            is_active = tool_config.get("active", False)
+            config_data = {k: v for k, v in tool_config.items() if k != "active"}
+
+        result[tool_id] = {
+            "label": meta.get("label", tool_id),
+            "category": meta.get("category"),
+            "is_active": is_active,
+            "config": config_data,
+            "config_fields": meta.get("config_fields", {}),
+            "has_instructions": meta.get("has_instructions", False),
+            "credential_source": meta.get("credential_source"),
+            "provider_badge": meta.get("provider_badge", ""),
+        }
+
+    return result
+
+
 @router.put("/{token}/tools")
 def update_client_tools(token: str, tools_update: ToolsConfigUpdate):
     """
