@@ -21,8 +21,6 @@ from shared.debug_queries import (
     get_error_types,
     get_loop_suspects,
     get_conversation_history,
-    get_usage_report,
-    get_daily_cost_chart,
     cleanup_old_errors,
 )
 
@@ -37,13 +35,12 @@ except ImportError:
 def render_admin_debug_tab():
     """Renderiza o painel completo de Debug & Alertas."""
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    tab1, tab2, tab3, tab4 = st.tabs(
         [
             "📊 Saúde do Sistema",
             "🐞 Errors & Bugs",
             "🔄 Loop Detector",
             "💬 Conversation Inspector",
-            "💰 Consumo & Custos",
         ]
     )
 
@@ -335,64 +332,3 @@ def render_admin_debug_tab():
         except Exception as e:
             st.error(f"Erro ao carregar dados: {e}")
 
-    # =========================================================
-    # TAB 5: CONSUMO & CUSTOS
-    # =========================================================
-    with tab5:
-        st.subheader("💰 Relatório de Consumo & Custos")
-
-        days_report = st.slider(
-            "Período (dias):", min_value=1, max_value=90, value=30, key="usage_days"
-        )
-
-        # Gráfico de custo por dia
-        chart_data = get_daily_cost_chart(days=days_report)
-        if chart_data:
-            st.subheader("📈 Custo Diário (USD)")
-            df_chart = pd.DataFrame(chart_data)
-            df_chart["dia"] = pd.to_datetime(df_chart["dia"])
-            df_chart = df_chart.set_index("dia")
-            st.line_chart(df_chart["custo"])
-
-        # Tabela detalhada
-        report = get_usage_report(days=days_report)
-        if report:
-            st.subheader("📋 Detalhamento por Cliente/Dia")
-            df_report = pd.DataFrame(report)
-
-            # Formatar colunas
-            st.dataframe(
-                df_report,
-                column_config={
-                    "client_name": "Cliente",
-                    "dia": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-                    "atendimentos": st.column_config.NumberColumn(
-                        "Atendimentos", format="%d"
-                    ),
-                    "tokens_openai": st.column_config.NumberColumn(
-                        "Tokens OpenAI", format="%d"
-                    ),
-                    "tokens_gemini": st.column_config.NumberColumn(
-                        "Tokens Gemini", format="%d"
-                    ),
-                    "segundos_audio": st.column_config.NumberColumn(
-                        "Áudio (s)", format="%d"
-                    ),
-                    "imagens": st.column_config.NumberColumn("Imagens", format="%d"),
-                    "custo_usd": st.column_config.NumberColumn(
-                        "Custo (USD)", format="$%.4f"
-                    ),
-                },
-                hide_index=True,
-                use_container_width=True,
-            )
-
-            # Resumo
-            total_cost = sum(float(r.get("custo_usd", 0) or 0) for r in report)
-            total_atendimentos = sum(int(r.get("atendimentos", 0) or 0) for r in report)
-            st.markdown("---")
-            c1, c2 = st.columns(2)
-            c1.metric("💰 Custo Total", f"${total_cost:.4f} USD")
-            c2.metric("📞 Total Atendimentos", total_atendimentos)
-        else:
-            st.info("Nenhum dado de consumo encontrado neste período.")

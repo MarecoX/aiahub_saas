@@ -298,8 +298,11 @@ with tab5:
         from views.admin_debug_tab import render_admin_debug_tab
 
         render_admin_debug_tab()
-    except ImportError as e:
+    except Exception as e:
+        import traceback
+
         st.error(f"Erro ao carregar painel de debug: {e}")
+        st.code(traceback.format_exc(), language="python")
         st.info("Verifique se o arquivo `views/admin_debug_tab.py` existe.")
 
 # Footer

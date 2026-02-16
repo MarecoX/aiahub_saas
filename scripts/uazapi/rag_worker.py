@@ -3,6 +3,7 @@ import os
 import asyncio
 import json
 import logging
+import time
 import redis.asyncio as redis
 from datetime import datetime
 
@@ -380,6 +381,7 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
 
         # Chama o Cérebro (OpenAI) passando as Tools (Gemini/Maps)
         # 4. CHAMA A IA (Multimodal + Tools + RAG)
+        _ai_start_time = time.time()
         response_text, usage_data, history_messages = await ask_saas(
             query=full_query,
             chat_id=chat_id,
@@ -515,9 +517,11 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                         )
                         conn.commit()
                 logger.info(f"\U0001f916 Tracking: IA respondeu em {chat_id}")
-                # Metrics: registra resposta da IA
+                # Metrics: registra resposta da IA com tempo de resposta
+                _response_time_ms = int((time.time() - _ai_start_time) * 1000)
                 log_event(str(_cid), chat_id, "ai_responded", {
-                    "tokens": usage_data.get("openai", {}).get("total_tokens", 0) if usage_data else 0
+                    "tokens": usage_data.get("openai", {}).get("total_tokens", 0) if usage_data else 0,
+                    "response_time_ms": _response_time_ms,
                 })
         except Exception as e:
             logger.warning(f"\u26a0\ufe0f Erro ao trackear resposta IA: {e}")
