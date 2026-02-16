@@ -1046,18 +1046,45 @@ def get_enabled_tools(
     uazapi_token_cfg = ""
 
     if client_config:
-        # MIGRATION: Fetch credentials from client_providers table
+        # Resolve WhatsApp provider credentials dynamically
         client_id = str(client_config.get("id"))
         try:
-            from scripts.shared.saas_db import get_provider_config
+            from scripts.shared.saas_db import get_provider_config, get_default_provider
 
-            provider_cfg = get_provider_config(client_id, "uazapi")
-            if provider_cfg:
-                uazapi_url_cfg = provider_cfg.get("url")
-                uazapi_token_cfg = provider_cfg.get("token")
-                logger.info(
-                    f"🔄 Credenciais Uazapi carregadas do banco para cliente {client_id}"
-                )
+            # 1. Try provider matching client's whatsapp_provider setting
+            wp = client_config.get("whatsapp_provider", "")
+            if wp:
+                provider_cfg = get_provider_config(client_id, wp)
+                if provider_cfg:
+                    uazapi_url_cfg = provider_cfg.get("url", "")
+                    uazapi_token_cfg = provider_cfg.get("token", "")
+                    logger.info(
+                        f"🔄 Credenciais carregadas do provider '{wp}' para cliente {client_id}"
+                    )
+
+            # 2. Fallback: try default provider
+            if not uazapi_url_cfg or not uazapi_token_cfg:
+                def_type, def_cfg = get_default_provider(client_id)
+                if def_cfg:
+                    uazapi_url_cfg = uazapi_url_cfg or def_cfg.get("url", "")
+                    uazapi_token_cfg = uazapi_token_cfg or def_cfg.get("token", "")
+                    if uazapi_url_cfg and uazapi_token_cfg:
+                        logger.info(
+                            f"🔄 Credenciais carregadas do default provider '{def_type}' para cliente {client_id}"
+                        )
+
+            # 3. Fallback: try legacy uazapi provider explicitly
+            if not uazapi_url_cfg or not uazapi_token_cfg:
+                provider_cfg = get_provider_config(client_id, "uazapi")
+                if provider_cfg:
+                    uazapi_url_cfg = uazapi_url_cfg or provider_cfg.get("url", "")
+                    uazapi_token_cfg = uazapi_token_cfg or provider_cfg.get("token", "")
+
+            # 4. Fallback: use client's api_url and token fields
+            if not uazapi_url_cfg:
+                uazapi_url_cfg = client_config.get("api_url", "")
+            if not uazapi_token_cfg:
+                uazapi_token_cfg = client_config.get("token", "")
         except Exception as e:
             logger.debug(f"ℹ️ Busca de provider no banco pulada ou falhou: {e}")
 
