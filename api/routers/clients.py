@@ -12,6 +12,7 @@ from saas_db import (
     get_all_clients_db,
     update_tools_config_db,
     delete_client_db,
+    upsert_provider_config,
 )
 from api.services.gemini_service import service as gemini_service
 
@@ -72,17 +73,33 @@ def create_client(client: ClientCreate, x_admin_user: str = Header("admin")):
     )
 
     if not new_id:
-        # Tenta buscar o erro se possível ou apenas informa
         raise HTTPException(
             status_code=400,
             detail="Erro ao criar cliente (Possível duplicidade de NOME ou USERNAME). Verifique se já não existe um cliente com este nome.",
         )
+
+    # 4. Cria provider em client_providers se fornecido
+    provider_id = None
+    if client.provider_config:
+        provider_id = upsert_provider_config(
+            client_id=str(new_id),
+            provider_type=client.provider_config.provider_type,
+            config=client.provider_config.config,
+            instance_name=client.provider_config.instance_name,
+            is_active=True,
+            is_default=True,
+        )
+        if provider_id:
+            logger.info(f"✅ Provider {client.provider_config.provider_type} criado para cliente {new_id}")
+        else:
+            logger.warning(f"⚠️ Cliente criado mas falha ao criar provider")
 
     return {
         "id": new_id,
         "message": "Cliente criado com sucesso",
         "gemini_store_id": store_id,
         "temp_password": temp_password,
+        "provider_id": provider_id,
     }
 
 

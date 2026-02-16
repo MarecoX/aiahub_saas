@@ -143,7 +143,7 @@ def render_whatsapp_tab(user_data):
             col_status, col_actions = st.columns([1, 1])
 
             # Get Status Logic
-            if col_status.button("🔄 Atualizar Status", use_container_width=True):
+            if col_status.button("🔄 Atualizar Status", width="stretch"):
                 # DEBUG: Direct request to see error details
                 import requests
 
@@ -554,7 +554,7 @@ def render_whatsapp_tab(user_data):
                 submit = st.button(
                     "📤 Criar e Enviar para Aprovação",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             with col_prev:
@@ -896,7 +896,7 @@ def render_whatsapp_tab(user_data):
 
                     # Botão estilo Card
                     if st.button(
-                        label, key=f"chat_btn_{chat_id}", use_container_width=True
+                        label, key=f"chat_btn_{chat_id}", width="stretch"
                     ):
                         st.session_state["active_chat_id"] = chat_id
                         st.rerun()
@@ -915,7 +915,7 @@ def render_whatsapp_tab(user_data):
                     # Vamos adicionar um botão de refresh simples e funcional
                     if st.button(
                         "🔄 Carregar Novas Mensagens",
-                        use_container_width=True,
+                        width="stretch",
                         type="secondary",
                     ):
                         st.rerun()

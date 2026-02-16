@@ -340,6 +340,8 @@ def enviar_relatorio(
     uazapi_url: str = None,
     uazapi_token: str = None,
     template: str = None,
+    provider_type: str = None,
+    provider_config: dict = None,
 ):
     """
     Envia um relatório (ficha, reserva, pedido) para um grupo do WhatsApp.
@@ -350,14 +352,12 @@ def enviar_relatorio(
     """
     import asyncio
 
-    logger.info(f"📤 Enviando Relatório ({tipo}) para grupo {grupo_id}")
+    logger.info(f"📤 Enviando Relatório ({tipo}) para grupo {grupo_id} via {provider_type or 'uazapi'}")
     missing = []
     if not grupo_id:
         missing.append("grupo_id")
-    if not uazapi_url:
-        missing.append("uazapi_url")
-    if not uazapi_token:
-        missing.append("uazapi_token")
+    if not provider_type and not uazapi_url:
+        missing.append("credenciais do provider")
     if missing:
         logger.warning(
             f"⚠️ Configuração incompleta: {', '.join(missing)}. Relatório não enviado."
@@ -375,30 +375,65 @@ def enviar_relatorio(
         for key, val in dados.items():
             msg = msg.replace(f"{{{{{key}}}}}", str(val))
     else:
-        # Template padrão
         linhas = [f"📋 *Novo {tipo.upper()}*", ""]
         for key, val in dados.items():
             linhas.append(f"• {key}: {val}")
         msg = "\n".join(linhas)
 
-    # Envia via Uazapi (ASYNC - mesmo padrão do whatsapp_sender que funciona)
+    # Envia via provider configurado
     async def _send():
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{uazapi_url}/send/text",
-                json={"number": grupo_id, "text": msg},
-                headers={"token": uazapi_token},
-                timeout=30.0,
-            )
-            return resp
+            p_type = provider_type or "uazapi"
+            p_cfg = provider_config or {}
+
+            if p_type == "uazapi":
+                url = p_cfg.get("url") or uazapi_url
+                token = p_cfg.get("token") or uazapi_token
+                resp = await client.post(
+                    f"{url.rstrip('/')}/send/text",
+                    json={"number": grupo_id, "text": msg},
+                    headers={"token": token},
+                    timeout=30.0,
+                )
+            elif p_type == "lancepilot":
+                token = p_cfg.get("token", "")
+                workspace = p_cfg.get("workspace_id", "")
+                lp_url = f"https://lancepilot.com/api/v3/workspaces/{workspace}/contacts/number/{grupo_id}/messages/text"
+                resp = await client.post(
+                    lp_url,
+                    json={"text": {"body": msg}},
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    timeout=15.0,
+                )
+            elif p_type == "meta":
+                access_token = p_cfg.get("access_token") or p_cfg.get("token", "")
+                phone_id = p_cfg.get("phone_id", "")
+                resp = await client.post(
+                    f"https://graph.facebook.com/v23.0/{phone_id}/messages",
+                    json={
+                        "messaging_product": "whatsapp",
+                        "recipient_type": "individual",
+                        "to": grupo_id,
+                        "type": "text",
+                        "text": {"body": msg},
+                    },
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    timeout=15.0,
+                )
+            else:
+                return None, f"Provider desconhecido: {p_type}"
+
+            return resp, None
 
     try:
-        resp = asyncio.run(_send())
+        resp, err = asyncio.run(_send())
+        if err:
+            return f"Erro ao enviar relatório: {err}"
         if resp.status_code in [200, 201]:
-            logger.info(f"✅ Relatório enviado para grupo {grupo_id}")
+            logger.info(f"✅ Relatório enviado para {grupo_id} via {provider_type or 'uazapi'}")
             return "SUCESSO: Relatório enviado. AÇÃO CONCLUÍDA. NÃO chame esta ferramenta novamente. Apenas responda ao usuário confirmando."
         else:
-            logger.error(f"❌ Erro Uazapi: {resp.status_code} - {resp.text}")
+            logger.error(f"❌ Erro envio: {resp.status_code} - {resp.text}")
             return f"Erro ao enviar relatório: {resp.status_code}"
     except Exception as e:
         logger.error(f"Erro enviar_relatorio: {e}")
@@ -1042,26 +1077,35 @@ def get_enabled_tools(
     """
     tools = []
 
+    # Resolve provider e credenciais via camada unificada
+    resolved_provider_type = ""
+    resolved_provider_config = {}
+    client_id_str = ""
+
+    # Mantém variáveis legadas para retrocompatibilidade com outras tools
     uazapi_url_cfg = ""
     uazapi_token_cfg = ""
 
     if client_config:
-        # MIGRATION: Fetch credentials from client_providers table
-        client_id = str(client_config.get("id"))
+        client_id_str = str(client_config.get("id", ""))
         try:
-            from scripts.shared.saas_db import get_provider_config
+            from scripts.shared.whatsapp_sender_unified import resolve_provider
 
-            provider_cfg = get_provider_config(client_id, "uazapi")
-            if provider_cfg:
-                uazapi_url_cfg = provider_cfg.get("url")
-                uazapi_token_cfg = provider_cfg.get("token")
-                logger.info(
-                    f"🔄 Credenciais Uazapi carregadas do banco para cliente {client_id}"
-                )
+            resolved_provider_type, resolved_provider_config = resolve_provider(
+                client_id_str, client_config
+            )
+            logger.info(
+                f"🔗 Provider resolvido: {resolved_provider_type} para cliente {client_id_str}"
+            )
+
+            # Popula variáveis legadas para tools que ainda dependem delas
+            if resolved_provider_type == "uazapi":
+                uazapi_url_cfg = resolved_provider_config.get("url", "")
+                uazapi_token_cfg = resolved_provider_config.get("token", "")
         except Exception as e:
-            logger.debug(f"ℹ️ Busca de provider no banco pulada ou falhou: {e}")
+            logger.debug(f"ℹ️ Resolução de provider falhou, usando fallback: {e}")
 
-    # Fallback para Env se banco estiver vazio
+    # Fallback para Env se resolução falhou
     if not uazapi_url_cfg:
         uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
     if not uazapi_token_cfg:
@@ -1248,8 +1292,7 @@ def get_enabled_tools(
                         else "nome, cpf, email, telefone, etc."
                     )
 
-                    # Uazapi configs já inicializadas no topo da função get_enabled_tools
-                    # Uazapi configs já carregadas no topo da função
+                    # Provider configs resolvidos no topo da função via resolve_provider
 
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
@@ -1264,7 +1307,7 @@ def get_enabled_tools(
 
                     # 2. Wrapper que aceita **kwargs dinâmicos
                     def create_relatorio_wrapper(
-                        f, grp, url, tkn, tpl, telefone_auto, known_fields
+                        f, grp, p_type, p_config, url, tkn, tpl, telefone_auto, known_fields
                     ):
                         def wrapped_relatorio(tipo: str = "ficha", **kwargs):
                             """Envia um relatório para o grupo de vendas no WhatsApp."""
@@ -1335,12 +1378,14 @@ def get_enabled_tools(
                                 return "AÇÃO CANCELADA: Ainda não há dados suficientes para enviar relatório. NÃO tente novamente agora. Continue a conversa normalmente e colete as informações necessárias primeiro."
 
                             logger.info(
-                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}"
+                                f"🚀 EXEC enviar_relatorio: tipo={tipo}, dados={dados_final}, grupo={grp}, provider={p_type}"
                             )
                             response_msg = f(
                                 tipo=tipo,
                                 dados=dados_final,
                                 grupo_id=grp,
+                                provider_type=p_type,
+                                provider_config=p_config,
                                 uazapi_url=url,
                                 uazapi_token=tkn,
                                 template=tpl,
@@ -1387,6 +1432,8 @@ def get_enabled_tools(
                             func=create_relatorio_wrapper(
                                 fn_captured,
                                 grupo_cfg,
+                                resolved_provider_type,
+                                resolved_provider_config,
                                 uazapi_url_cfg,
                                 uazapi_token_cfg,
                                 template_cfg,
@@ -1401,7 +1448,7 @@ Campos esperados: {placeholders_str}""",
                         )
                     )
                     logger.info(
-                        f"🔧 Tool Enviar Relatório Dinâmica: grupo={grupo_cfg[:20]}... | Campos detectados: {placeholders_str}"
+                        f"🔧 Tool Enviar Relatório Dinâmica: grupo={grupo_cfg[:20]}... | provider={resolved_provider_type} | Campos: {placeholders_str}"
                     )
 
                 elif tool_name == "cal_dot_com":
