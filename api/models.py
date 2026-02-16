@@ -1,5 +1,53 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict, Any, List
+from enum import Enum
+
+
+# --- Provider Types ---
+
+
+class ProviderType(str, Enum):
+    uazapi = "uazapi"
+    meta = "meta"
+    lancepilot = "lancepilot"
+
+
+# --- Provider Models ---
+
+
+class ProviderConfigCreate(BaseModel):
+    """Configuração de um provider WhatsApp."""
+
+    provider_type: ProviderType = Field(..., description="Tipo do provider: uazapi, meta, lancepilot")
+    config: Dict[str, Any] = Field(
+        ...,
+        description="Credenciais do provider. Uazapi: {url, token}. Meta: {access_token, phone_id, waba_id}. LancePilot: {token, workspace_id}",
+    )
+    instance_name: str = Field("Principal", description="Nome da instância (ex: 'Loja Centro', 'Filial 2')")
+    is_default: bool = Field(False, description="Se é o provider padrão para envio")
+
+
+class ProviderConfigUpdate(BaseModel):
+    """Atualização parcial de um provider."""
+
+    config: Optional[Dict[str, Any]] = Field(None, description="Novas credenciais")
+    instance_name: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_default: Optional[bool] = None
+
+
+class ProviderConfigResponse(BaseModel):
+    """Resposta com dados do provider."""
+
+    id: str
+    provider_type: str
+    instance_name: str
+    config: Dict[str, Any]
+    is_active: bool
+    is_default: bool
+
+
+# --- Client Models ---
 
 
 class ClientBase(BaseModel):
@@ -12,7 +60,7 @@ class ClientBase(BaseModel):
         None, description="ID do Vector Store no Gemini"
     )
     api_url: Optional[str] = Field(
-        None, description="URL da API do Cliente (Webhook de Retorno)"
+        None, description="(Legado) URL da API Uazapi. Prefira usar provider_config.",
     )
     human_attendant_timeout: Optional[int] = Field(
         3600, description="Tempo de silêncio (segundos) após intervenção humana"
@@ -27,7 +75,12 @@ class ClientBase(BaseModel):
 
 
 class ClientCreate(ClientBase):
-    pass
+    """Criação de cliente com provider opcional."""
+
+    provider_config: Optional[ProviderConfigCreate] = Field(
+        None,
+        description="Configuração do provider WhatsApp. Se informado, cria entrada em client_providers automaticamente.",
+    )
 
 
 class ClientUpdate(BaseModel):

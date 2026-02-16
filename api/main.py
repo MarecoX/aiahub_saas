@@ -6,6 +6,7 @@ import logging
 
 from api.routers import clients
 from api.routers import meta
+from api.routers import providers
 
 # Configuração de Logs
 logging.basicConfig(level=logging.INFO)
@@ -36,13 +37,7 @@ def health_check():
 @app.get("/politica-de-privacidade", response_class=HTMLResponse)
 async def privacy_policy():
     """Retorna a página de Política de Privacidade para conformidade com o Facebook."""
-    # Caminho relativo considerando execução da raiz ou api/
     possible_paths = ["views/privacy_policy.html", "../views/privacy_policy.html"]
-
-    # ... (rest of privacy_policy function content if visible, or just leave it alone since we are only adding router below)
-    # Ah, I need to be careful not to delete content I can't see.
-    # It's safer to append the include_router at the end if possible, or target the import block explicitly.
-
     for path in possible_paths:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -52,6 +47,7 @@ async def privacy_policy():
 
 # Rotas
 app.include_router(clients.router, prefix="/api/v1/clients", tags=["Clients"])
+app.include_router(providers.router, prefix="/api/v1/clients/{token}/providers", tags=["Providers"])
 app.include_router(meta.router, prefix="/api/v1/meta", tags=["Meta Webhooks"])
 
 
