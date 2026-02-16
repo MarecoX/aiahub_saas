@@ -342,27 +342,22 @@ def enviar_relatorio(
     template: str = None,
     provider_type: str = None,
     provider_config: dict = None,
-    client_id: str = None,
 ):
     """
     Envia um relatório (ficha, reserva, pedido) para um grupo do WhatsApp.
     Use quando o cliente confirmar interesse, fechar pedido ou reservar produto.
-    Suporta múltiplos providers (Uazapi, LancePilot, Meta) via camada unificada.
     Args:
         tipo (str): Tipo do relatório ("ficha", "reserva", "pedido", etc.)
         dados (dict): Dados coletados (nome, telefone, produto, valor, etc.)
     """
     import asyncio
 
-    logger.info(f"📤 Enviando Relatório ({tipo}) para grupo {grupo_id}")
+    logger.info(f"📤 Enviando Relatório ({tipo}) para grupo {grupo_id} via {provider_type or 'uazapi'}")
     missing = []
     if not grupo_id:
         missing.append("grupo_id")
-    # Valida credenciais: aceita unified OU legacy
-    has_unified = provider_type and provider_config
-    has_legacy = uazapi_url and uazapi_token
-    if not has_unified and not has_legacy:
-        missing.append("credenciais do provider (url/token)")
+    if not provider_type and not uazapi_url:
+        missing.append("credenciais do provider")
     if missing:
         logger.warning(
             f"⚠️ Configuração incompleta: {', '.join(missing)}. Relatório não enviado."
@@ -380,51 +375,66 @@ def enviar_relatorio(
         for key, val in dados.items():
             msg = msg.replace(f"{{{{{key}}}}}", str(val))
     else:
-        # Template padrão
         linhas = [f"📋 *Novo {tipo.upper()}*", ""]
         for key, val in dados.items():
             linhas.append(f"• {key}: {val}")
         msg = "\n".join(linhas)
 
-    # Envia via sender unificado (suporta todos os providers)
+    # Envia via provider configurado
     async def _send():
-        from scripts.shared.whatsapp_sender_unified import send_text
-        return await send_text(
-            client_id=client_id or "",
-            to=grupo_id,
-            text=msg,
-            provider_type=provider_type,
-            provider_config=provider_config,
-        )
-
-    # Fallback legacy: se só tem uazapi_url/token (retrocompatibilidade)
-    async def _send_legacy():
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{uazapi_url}/send/text",
-                json={"number": grupo_id, "text": msg},
-                headers={"token": uazapi_token},
-                timeout=30.0,
-            )
-            if resp.status_code in [200, 201]:
-                return {"status": "sent", "provider": "uazapi"}
+            p_type = provider_type or "uazapi"
+            p_cfg = provider_config or {}
+
+            if p_type == "uazapi":
+                url = p_cfg.get("url") or uazapi_url
+                token = p_cfg.get("token") or uazapi_token
+                resp = await client.post(
+                    f"{url.rstrip('/')}/send/text",
+                    json={"number": grupo_id, "text": msg},
+                    headers={"token": token},
+                    timeout=30.0,
+                )
+            elif p_type == "lancepilot":
+                token = p_cfg.get("token", "")
+                workspace = p_cfg.get("workspace_id", "")
+                lp_url = f"https://lancepilot.com/api/v3/workspaces/{workspace}/contacts/number/{grupo_id}/messages/text"
+                resp = await client.post(
+                    lp_url,
+                    json={"text": {"body": msg}},
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    timeout=15.0,
+                )
+            elif p_type == "meta":
+                access_token = p_cfg.get("access_token") or p_cfg.get("token", "")
+                phone_id = p_cfg.get("phone_id", "")
+                resp = await client.post(
+                    f"https://graph.facebook.com/v23.0/{phone_id}/messages",
+                    json={
+                        "messaging_product": "whatsapp",
+                        "recipient_type": "individual",
+                        "to": grupo_id,
+                        "type": "text",
+                        "text": {"body": msg},
+                    },
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    timeout=15.0,
+                )
             else:
-                return {"error": f"HTTP {resp.status_code}", "body": resp.text}
+                return None, f"Provider desconhecido: {p_type}"
+
+            return resp, None
 
     try:
-        if has_unified:
-            result = asyncio.run(_send())
-        else:
-            result = asyncio.run(_send_legacy())
-
-        if result.get("status") == "sent":
-            provider_name = result.get("provider", "whatsapp")
-            logger.info(f"✅ Relatório enviado para {grupo_id} via {provider_name}")
+        resp, err = asyncio.run(_send())
+        if err:
+            return f"Erro ao enviar relatório: {err}"
+        if resp.status_code in [200, 201]:
+            logger.info(f"✅ Relatório enviado para {grupo_id} via {provider_type or 'uazapi'}")
             return "SUCESSO: Relatório enviado. AÇÃO CONCLUÍDA. NÃO chame esta ferramenta novamente. Apenas responda ao usuário confirmando."
         else:
-            error = result.get("error", "Erro desconhecido")
-            logger.error(f"❌ Erro envio relatório: {error}")
-            return f"Erro ao enviar relatório: {error}"
+            logger.error(f"❌ Erro envio: {resp.status_code} - {resp.text}")
+            return f"Erro ao enviar relatório: {resp.status_code}"
     except Exception as e:
         logger.error(f"Erro enviar_relatorio: {e}")
         return f"Erro ao enviar: {e}"
@@ -1297,7 +1307,7 @@ def get_enabled_tools(
 
                     # 2. Wrapper que aceita **kwargs dinâmicos
                     def create_relatorio_wrapper(
-                        f, grp, p_type, p_config, c_id, url, tkn, tpl, telefone_auto, known_fields
+                        f, grp, p_type, p_config, url, tkn, tpl, telefone_auto, known_fields
                     ):
                         def wrapped_relatorio(tipo: str = "ficha", **kwargs):
                             """Envia um relatório para o grupo de vendas no WhatsApp."""
@@ -1376,7 +1386,6 @@ def get_enabled_tools(
                                 grupo_id=grp,
                                 provider_type=p_type,
                                 provider_config=p_config,
-                                client_id=c_id,
                                 uazapi_url=url,
                                 uazapi_token=tkn,
                                 template=tpl,
@@ -1425,7 +1434,6 @@ def get_enabled_tools(
                                 grupo_cfg,
                                 resolved_provider_type,
                                 resolved_provider_config,
-                                client_id_str,
                                 uazapi_url_cfg,
                                 uazapi_token_cfg,
                                 template_cfg,
