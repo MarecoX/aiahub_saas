@@ -161,6 +161,164 @@ tool_precadastro = StructuredTool.from_function(
 )
 
 
+# --- 3. Verificar Cliente (CPF/CNPJ) ---
+
+
+class VerificarClienteInput(BaseModel):
+    cpfcnpj: str = Field(description="CPF ou CNPJ do cliente (apenas números)")
+
+
+def verificar_cliente_sgp(cpfcnpj: str, sgp_config: dict = None) -> str:
+    """
+    Verifica se a pessoa é cliente do provedor pelo CPF ou CNPJ.
+    Retorna dados do cliente e contratos ativos se encontrado.
+    """
+    cfg = sgp_config or {}
+    url_base = cfg.get("sgp_url") or SGP_URL
+    token = cfg.get("sgp_token") or SGP_TOKEN
+    app_name = cfg.get("sgp_app") or SGP_APP
+
+    if not url_base or not token or not app_name:
+        return "Erro: Configuração do SGP incompleta (URL, TOKEN ou APP faltando)."
+
+    url = f"{url_base}/api/ura/clientes/"
+    payload = {
+        "app": app_name,
+        "token": token,
+        "cpfcnpj": cpfcnpj.replace(".", "").replace("-", "").replace("/", "").strip(),
+    }
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(url, data=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        if not data or (isinstance(data, dict) and data.get("erro")):
+            return f"Cliente não encontrado para CPF/CNPJ: {cpfcnpj}"
+
+        return f"Dados do cliente: {data}"
+    except Exception as e:
+        logger.error(f"Erro ao verificar cliente SGP: {e}")
+        return f"Erro ao verificar cliente: {str(e)}"
+
+
+tool_verificar_cliente = StructuredTool.from_function(
+    func=verificar_cliente_sgp,
+    name="verificar_cliente_sgp",
+    description="Verifica se a pessoa é cliente do provedor pelo CPF ou CNPJ. Use ANTES de qualquer consulta de fatura ou suporte.",
+    args_schema=VerificarClienteInput,
+)
+
+
+# --- 4. Segunda Via de Fatura ---
+
+
+class SegundaViaInput(BaseModel):
+    id_contrato: str = Field(
+        description="ID do contrato do cliente (obtido via verificar_cliente_sgp)"
+    )
+
+
+def segunda_via_fatura_sgp(id_contrato: str, sgp_config: dict = None) -> str:
+    """
+    Gera a segunda via de fatura(s) de um contrato no SGP.
+    Retorna as faturas em aberto com valores, vencimentos e IDs.
+    """
+    cfg = sgp_config or {}
+    url_base = cfg.get("sgp_url") or SGP_URL
+    token = cfg.get("sgp_token") or SGP_TOKEN
+    app_name = cfg.get("sgp_app") or SGP_APP
+
+    if not url_base or not token or not app_name:
+        return "Erro: Configuração do SGP incompleta (URL, TOKEN ou APP faltando)."
+
+    url = f"{url_base}/api/ura/fatura2via/"
+    payload = {
+        "app": app_name,
+        "token": token,
+        "id_contrato": id_contrato,
+    }
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(url, data=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        if not data or (isinstance(data, dict) and data.get("erro")):
+            return f"Nenhuma fatura encontrada para o contrato {id_contrato}."
+
+        return f"Faturas do contrato {id_contrato}: {data}"
+    except Exception as e:
+        logger.error(f"Erro ao buscar segunda via SGP: {e}")
+        return f"Erro ao buscar segunda via: {str(e)}"
+
+
+tool_segunda_via = StructuredTool.from_function(
+    func=segunda_via_fatura_sgp,
+    name="segunda_via_fatura_sgp",
+    description="Busca faturas em aberto de um contrato e retorna dados para pagamento. Necessita do id_contrato obtido via verificar_cliente_sgp.",
+    args_schema=SegundaViaInput,
+)
+
+
+# --- 5. Gerar PIX ---
+
+
+class GerarPixInput(BaseModel):
+    id_fatura: str = Field(
+        description="ID da fatura (obtido via segunda_via_fatura_sgp)"
+    )
+
+
+def gerar_pix_sgp(id_fatura: str, sgp_config: dict = None) -> str:
+    """
+    Gera o código PIX (copia e cola) para pagamento de uma fatura específica.
+    """
+    cfg = sgp_config or {}
+    url_base = cfg.get("sgp_url") or SGP_URL
+    token = cfg.get("sgp_token") or SGP_TOKEN
+    app_name = cfg.get("sgp_app") or SGP_APP
+
+    if not url_base or not token or not app_name:
+        return "Erro: Configuração do SGP incompleta (URL, TOKEN ou APP faltando)."
+
+    url = f"{url_base}/api/ura/pagamento/pix/{id_fatura}"
+    payload = {
+        "app": app_name,
+        "token": token,
+    }
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(url, data=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        if not data or (isinstance(data, dict) and data.get("erro")):
+            return f"Não foi possível gerar PIX para a fatura {id_fatura}."
+
+        return f"PIX gerado para fatura {id_fatura}: {data}"
+    except Exception as e:
+        logger.error(f"Erro ao gerar PIX SGP: {e}")
+        return f"Erro ao gerar PIX: {str(e)}"
+
+
+tool_gerar_pix = StructuredTool.from_function(
+    func=gerar_pix_sgp,
+    name="gerar_pix_sgp",
+    description="Gera código PIX (copia e cola) para pagamento de uma fatura. Necessita do id_fatura obtido via segunda_via_fatura_sgp.",
+    args_schema=GerarPixInput,
+)
+
+
 # Exportar lista de tools
 def get_sgp_tools():
-    return [tool_viabilidade, tool_precadastro]
+    return [
+        tool_viabilidade,
+        tool_precadastro,
+        tool_verificar_cliente,
+        tool_segunda_via,
+        tool_gerar_pix,
+    ]

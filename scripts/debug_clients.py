@@ -1,10 +1,10 @@
 import os
 import sys
 
-# Add root folder to sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Add shared folder to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "shared")))
 
-from scripts.shared.saas_db import get_all_clients_db
+from saas_db import get_all_clients_db
 
 
 def list_and_debug_clients():

@@ -16,7 +16,7 @@ sys.path.insert(
 
 from message_handler import handle_message
 from config import REDIS_URL, BUFFER_KEY_SUFIX, BUFFER_TTL
-from saas_db import get_connection, get_client_config, log_event
+from saas_db import get_connection, get_client_config, get_provider_config, log_event
 
 # Configuração de Logger
 logging.basicConfig(level=logging.INFO)
@@ -162,12 +162,15 @@ async def run_ingest(webhook_data):
         if token:
             client_config = get_client_config(token)
             if client_config:
-                # Prioridade: tools_config.uazapi > colunas diretas
-                tools_cfg = client_config.get("tools_config") or {}
-                uazapi_cfg = tools_cfg.get("uazapi", {})
-
-                api_url = uazapi_cfg.get("url") or client_config.get("api_url")
-                api_key = uazapi_cfg.get("api_key") or client_config.get("token")
+                # Prioridade: client_providers > colunas legadas
+                uazapi_cfg = get_provider_config(str(client_config["id"]), "uazapi")
+                if uazapi_cfg:
+                    api_url = uazapi_cfg.get("url")
+                    api_key = uazapi_cfg.get("token")
+                else:
+                    # Fallback: colunas legadas
+                    api_url = client_config.get("api_url")
+                    api_key = client_config.get("token")
         # -----------------------------------------------------------
 
         # 3. Processa Mídia/Texto (Usa lógica central robusta do message_handler)
