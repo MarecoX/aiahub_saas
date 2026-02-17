@@ -318,7 +318,7 @@ TOOL_REGISTRY = {
     },
     # ── SGP Tools (ISP) ──
     "sgp_tools": {
-        "label": "\U0001f527 SGP (Viabilidade + Pre-Cadastro)",
+        "label": "\U0001f527 SGP (Vendas + Suporte)",
         "category": "isp",
         "applicable_to": ["isp"],
         "has_instructions": False,
@@ -329,6 +329,7 @@ TOOL_REGISTRY = {
         },
         "credential_source": "config",
         "wrapper_type": "custom",
+        "ui_help": "Viabilidade, Pre-Cadastro, Verificar Cliente (CPF/CNPJ), Segunda Via de Fatura e PIX.",
     },
 }
 
