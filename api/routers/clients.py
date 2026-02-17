@@ -103,49 +103,7 @@ def create_client(client: ClientCreate, x_admin_user: str = Header("admin")):
     }
 
 
-@router.delete("/{token}", status_code=204)
-def delete_client(token: str, x_admin_user: str = Header("admin")):
-    """Remove um cliente e seus dados."""
-    client = get_client_config(token)
-    if not client:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado")
-
-    # DB Delete logic would go here. Importing/Checking if db function exists.
-    # Assuming delete_client_db exists or we need to add it to saas_db.
-    # Since we can't edit saas_db easily in one go, checking imports first.
-    # Actually, let's implement the SQL directly here or add to saas_db.
-    # We will assume saas_db needs update.
-    # For now, let's fail if not implemented.
-    success = delete_client_db(client["id"])
-    if not success:
-        raise HTTPException(status_code=500, detail="Erro ao deletar cliente")
-    return
-
-
-@router.get("/{token}")
-def get_client(token: str):
-    """Busca configurações de um cliente específico pelo Token."""
-    client = get_client_config(token)
-    if not client:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado")
-    return client
-
-
-@router.put("/{token}")
-def update_client(token: str, update_data: ClientUpdate):
-    """Atualiza dados básicos do cliente."""
-    client = get_client_config(token)
-    if not client:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado")
-
-    # Converte Pydantic para dict sem Nones
-    data_dict = update_data.model_dump(exclude_unset=True)
-
-    success = update_client_db(client["id"], data_dict)
-    if not success:
-        raise HTTPException(status_code=500, detail="Falha ao atualizar banco de dados")
-
-    return {"message": "Cliente atualizado"}
+# --- ROTAS FIXAS (devem vir ANTES de /{token} para não serem engolidas) ---
 
 
 @router.get("/tools/catalog", response_model=Dict[str, Any])
@@ -183,6 +141,48 @@ def list_tools_catalog(business_type: str = "generic"):
         },
         "total": len(filtered),
     }
+
+
+# --- ROTAS COM {token} (path param genérico — sempre por último) ---
+
+
+@router.delete("/{token}", status_code=204)
+def delete_client(token: str, x_admin_user: str = Header("admin")):
+    """Remove um cliente e seus dados."""
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    success = delete_client_db(client["id"])
+    if not success:
+        raise HTTPException(status_code=500, detail="Erro ao deletar cliente")
+    return
+
+
+@router.get("/{token}")
+def get_client(token: str):
+    """Busca configurações de um cliente específico pelo Token."""
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    return client
+
+
+@router.put("/{token}")
+def update_client(token: str, update_data: ClientUpdate):
+    """Atualiza dados básicos do cliente."""
+    client = get_client_config(token)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    # Converte Pydantic para dict sem Nones
+    data_dict = update_data.model_dump(exclude_unset=True)
+
+    success = update_client_db(client["id"], data_dict)
+    if not success:
+        raise HTTPException(status_code=500, detail="Falha ao atualizar banco de dados")
+
+    return {"message": "Cliente atualizado"}
 
 
 @router.get("/{token}/tools")
