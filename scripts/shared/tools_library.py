@@ -1077,33 +1077,19 @@ def get_enabled_tools(
     """
     tools = []
 
-    # Resolve provider e credenciais via camada unificada
-    resolved_provider_type = ""
-    resolved_provider_config = {}
-    client_id_str = ""
-
-    # Mantém variáveis legadas para retrocompatibilidade com outras tools
+    # Resolve credenciais do provider via client_providers
     uazapi_url_cfg = ""
     uazapi_token_cfg = ""
 
     if client_config:
         client_id_str = str(client_config.get("id", ""))
         try:
-            from whatsapp_sender_unified import resolve_provider
-
-            resolved_provider_type, resolved_provider_config = resolve_provider(
-                client_id_str, client_config
-            )
-            logger.info(
-                f"🔗 Provider resolvido: {resolved_provider_type} para cliente {client_id_str}"
-            )
-
-            # Popula variáveis legadas para tools que ainda dependem delas
-            if resolved_provider_type == "uazapi":
-                uazapi_url_cfg = resolved_provider_config.get("url", "")
-                uazapi_token_cfg = resolved_provider_config.get("token", "")
+            uazapi_cfg = get_provider_config(client_id_str, "uazapi")
+            if uazapi_cfg:
+                uazapi_url_cfg = uazapi_cfg.get("url", "")
+                uazapi_token_cfg = uazapi_cfg.get("token", "")
         except Exception as e:
-            logger.debug(f"ℹ️ Resolução de provider falhou, usando fallback: {e}")
+            logger.debug(f"Fallback env: {e}")
 
     # Fallback para Env se resolução falhou
     if not uazapi_url_cfg:
@@ -1291,8 +1277,6 @@ def get_enabled_tools(
                         if placeholders
                         else "nome, cpf, email, telefone, etc."
                     )
-
-                    # Provider configs resolvidos no topo da função via resolve_provider
 
                     fn_captured = (
                         tool_func.func if hasattr(tool_func, "func") else tool_func
