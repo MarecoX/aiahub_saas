@@ -17,7 +17,7 @@ from scripts.shared.tools_library import get_enabled_tools
 
 logger = logging.getLogger(__name__)
 
-VERIFY_TOKEN_SECRET = "aiahub_meta_secret_2026"  # Hardcoded or Env Var
+VERIFY_TOKEN_SECRET = os.getenv("META_VERIFY_TOKEN", "aiahub_meta_secret_2026")
 
 
 def verify_webhook_challenge(mode: str, token: str, challenge: str) -> Optional[str]:
@@ -65,20 +65,11 @@ async def process_incoming_webhook(data: Dict[str, Any]):
 
                 # Buscar config do provider Meta
                 meta_cfg = get_provider_config(str(client_config["id"]), "meta")
-
-                # Fallback para estrutura antiga
                 if not meta_cfg:
-                    tools = client_config.get("tools_config", {})
-                    meta_cfg = tools.get("whatsapp", {}) or tools.get(
-                        "whatsapp_official", {}
-                    )
-
-                if not meta_cfg.get(
-                    "active", True
-                ):  # Default True para providers migrados
+                    logger.warning(f"Meta provider não configurado para {client_config['id']}")
                     continue
 
-                access_token = meta_cfg.get("access_token") or meta_cfg.get("token")
+                access_token = meta_cfg.get("access_token")
                 meta = MetaClient(access_token, phone_id_from_webhook)
 
                 # MESSAGES
@@ -183,12 +174,11 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                         continue
 
                     # CALL AI
+                    tools_config = client_config.get("tools_config", {})
                     tools_list = get_enabled_tools(
-                        tools, chat_id=from_phone, client_config=client_config
+                        tools_config, chat_id=from_phone, client_config=client_config
                     )
 
-                    # PREPARE SYSTEM PROMPT (Inject Config)
-                    # PREPARE SYSTEM PROMPT (Inject Config)
                     from datetime import datetime
 
                     system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"

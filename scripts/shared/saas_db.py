@@ -243,38 +243,32 @@ def get_client_token_by_phone(phone_number: str):
 
 def get_client_token_by_waba_phone(phone_id: str):
     """
-    Busca o Token do Cliente pesquisando dentro do JSONB tools_config
-    pelo campo 'whatsapp_official' -> 'phone_id'.
-    ATUALIZADO: Usa pool de conexões ao invés de conexão direta.
+    Busca o Token do Cliente pelo phone_id da Meta via client_providers.
     """
     if not DB_URL or not phone_id:
         return None
 
     try:
-        # Usa pool ao invés de conexão direta
         with get_connection() as conn:
             with conn.cursor() as cur:
-                # Busca cliente onde (tools_config -> 'whatsapp' ->> 'phone_id')
-                # OU (tools_config -> 'whatsapp_official' ->> 'phone_id') match
-                sql = """
-                    SELECT token 
-                    FROM clients 
-                    WHERE tools_config->'whatsapp'->>'phone_id' = %s
-                       OR tools_config->'whatsapp_official'->>'phone_id' = %s
+                cur.execute(
+                    """
+                    SELECT c.token
+                    FROM client_providers cp
+                    JOIN clients c ON c.id = cp.client_id
+                    WHERE cp.provider_type = 'meta'
+                      AND cp.is_active = true
+                      AND cp.config->>'phone_id' = %s
                     LIMIT 1
-                """
-                cur.execute(sql, (phone_id, phone_id))
+                    """,
+                    (phone_id,),
+                )
                 result = cur.fetchone()
-
                 if result:
-                    logger.info(
-                        f"✅ Cliente WABA identificado via PhoneID {phone_id}: {result['token']}"
-                    )
                     return result["token"]
-                else:
-                    return None
+                return None
     except Exception as e:
-        logger.error(f"❌ Erro ao buscar cliente via WABA PhoneID: {e}")
+        logger.error(f"Erro ao buscar cliente via WABA PhoneID: {e}")
         return None
 
 

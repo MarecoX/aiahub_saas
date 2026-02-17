@@ -85,16 +85,10 @@ async def check_and_run_followups():
 
                 # --- BUSCAR CONFIG META DE client_providers ---
                 meta_cfg = get_provider_config(str(client_id), "meta")
-
-                # Fallback para estrutura antiga
                 if not meta_cfg:
-                    meta_cfg = tools_config_json.get("whatsapp", {})
-                    meta_legacy = tools_config_json.get("whatsapp_official", {})
-                    if not meta_cfg.get("active") and not meta_legacy.get("active"):
-                        continue
-                    meta_cfg = meta_cfg if meta_cfg.get("active") else meta_legacy
+                    continue
 
-                token = meta_cfg.get("access_token") or meta_cfg.get("token")
+                token = meta_cfg.get("access_token")
                 phone_id = meta_cfg.get("phone_id")
 
                 if not token or not phone_id:
