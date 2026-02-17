@@ -5,7 +5,7 @@ Usa `client_providers` como single source of truth para credenciais.
 Cada worker/sender continua usando seu próprio mecanismo de envio.
 
 Uso:
-    from scripts.shared.whatsapp_sender_unified import resolve_provider
+    from whatsapp_sender_unified import resolve_provider
 
     provider_type, config = resolve_provider(client_id, client_config)
     # provider_type: "uazapi" | "lancepilot" | "meta"
@@ -32,7 +32,7 @@ def resolve_provider(client_id: str, client_config: dict = None) -> Tuple[str, d
     Returns:
         (provider_type, config) ex: ("uazapi", {"url": "...", "token": "..."})
     """
-    from scripts.shared.saas_db import get_provider_config, get_default_provider
+    from saas_db import get_provider_config, get_default_provider
 
     if not client_id:
         return ("uazapi", _fallback_env())

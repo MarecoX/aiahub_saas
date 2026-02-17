@@ -2,13 +2,7 @@ import json
 import os
 import sys
 
-# Add root to sys.path to resolve imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(os.path.dirname(current_dir))
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
-
-from scripts.shared.saas_db import get_connection
+from saas_db import get_connection
 
 
 def debug_db_token(target_token):

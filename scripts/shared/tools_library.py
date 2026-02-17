@@ -1089,7 +1089,7 @@ def get_enabled_tools(
     if client_config:
         client_id_str = str(client_config.get("id", ""))
         try:
-            from scripts.shared.whatsapp_sender_unified import resolve_provider
+            from whatsapp_sender_unified import resolve_provider
 
             resolved_provider_type, resolved_provider_config = resolve_provider(
                 client_id_str, client_config
@@ -1117,7 +1117,7 @@ def get_enabled_tools(
     logger.info(f"🔍 DEBUG TOOLS CONFIG: Keys={list(tools_config.keys())}")
 
     # Import registry for wrapper_type dispatching
-    from scripts.shared.tool_registry import TOOL_REGISTRY
+    from tool_registry import TOOL_REGISTRY
 
     for tool_name, config_value in tools_config.items():
         if tool_name in AVAILABLE_TOOLS:
