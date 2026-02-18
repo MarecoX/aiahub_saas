@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-META_API_VERSION = "v23.0"
+META_API_VERSION = "v24.0"
 BASE_URL = f"https://graph.facebook.com/{META_API_VERSION}"
 
 
@@ -120,25 +120,6 @@ class MetaClient:
             except Exception as e:
                 logger.error(f"❌ Erro subscrever WABA: {e}")
                 return False
-
-    async def create_template(
-        self,
-        name: str,
-        category: str,
-        components: List[Dict[str, Any]],
-        language: str = "pt_BR",
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Cria um novo template de mensagem na WABA.
-        Necessário para aprovação 'whatsapp_business_management'.
-        """
-        # Para criar templates, usamos o WABA ID, não o Phone ID.
-        # Mas a Meta aceita via WABA ID. Vamos precisar do WABA ID aqui.
-        # Ajuste: O método precisa receber o WABA ID, ou o cliente precisa ser inicializado com ele.
-        # Por padrão, vamos tentar usar o phone_id se o waba_id não for passado,
-        # mas a documentação diz POST /{whatsapp-business-account-id}/message_templates.
-        # O self.phone_id é o ID do número.
-        pass
 
     async def set_two_step_verification(self, pin: str) -> bool:
         """

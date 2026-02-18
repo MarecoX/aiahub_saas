@@ -13,7 +13,6 @@ from scripts.meta.meta_oauth import exchange_code_for_token
 from scripts.shared.saas_db import (
     get_client_config,
     get_client_config_by_id,
-    update_tools_config_db,
     get_connection,
     upsert_provider_config,
 )
@@ -66,31 +65,20 @@ async def meta_webhook_event(client_verify_token: str, request: Request):
 
 @router.get("/templates")
 async def list_templates(client_token: str):
-    """
-    Lista templates aprovados para um cliente.
-    """
+    """Lista templates aprovados para um cliente."""
     client = get_client_config(client_token)
     if not client:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
 
-    tools = client.get("tools_config", {})
-    waba = tools.get("whatsapp", {})
+    from scripts.shared.saas_db import get_provider_config
 
-    # Check for both formats: old 'whatsapp_official' and new 'whatsapp'
-    if not waba.get("mode") == "official" and not tools.get(
-        "whatsapp_official", {}
-    ).get("active"):
-        # Try legacy key
-        waba = tools.get("whatsapp_official", {})
-
-    if not waba.get("active") and not waba.get("token"):
-        raise HTTPException(status_code=400, detail="Integração Meta não ativa")
+    meta_cfg = get_provider_config(str(client["id"]), "meta")
+    if not meta_cfg or not meta_cfg.get("access_token"):
+        raise HTTPException(status_code=400, detail="Integração Meta não configurada")
 
     try:
-        meta = MetaClient(
-            waba.get("token") or waba.get("access_token"), waba.get("phone_id")
-        )
-        templates = await meta.get_templates(waba.get("waba_id"))  # Requer WABA ID
+        meta = MetaClient(meta_cfg["access_token"], meta_cfg["phone_id"])
+        templates = await meta.get_templates(meta_cfg.get("waba_id"))
         return templates
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -159,48 +147,29 @@ async def meta_oauth_exchange(payload: OAuthCode):
         )
 
     long_lived_token = token_data.get("access_token")
-
-    # 3. Salva no Banco de Dados (tools_config -> whatsapp)
     waba_id = payload.waba_id
     phone_id = payload.phone_id
 
-    # Recupera config atual
-    tools_config = client_config.get("tools_config") or {}
-
-    # Atualiza apenas a sessão do WhatsApp
-    tools_config["whatsapp"] = {
-        "active": True,
-        "mode": "official",
-        "access_token": long_lived_token,
-        "waba_id": waba_id,
-        "phone_id": phone_id,
-        "app_id": os.getenv("META_APP_ID"),
-    }
-
-    # Persiste
-    success = update_tools_config_db(client_config["id"], tools_config)
+    # Salva em client_providers (fonte única de verdade)
+    try:
+        upsert_provider_config(
+            client_id=str(client_config["id"]),
+            provider_type="meta",
+            config={
+                "access_token": long_lived_token,
+                "waba_id": waba_id,
+                "phone_id": phone_id,
+                "app_id": os.getenv("META_APP_ID"),
+            },
+            is_active=True,
+            is_default=True,
+        )
+        success = True
+    except Exception as e:
+        logger.error(f"Falha ao salvar config Meta: {e}")
+        success = False
 
     if success:
-        logger.info(f"💾 Credenciais Meta salvas para cliente {client_config['id']}")
-
-        # 3.5 Salvar em client_providers (nova estrutura)
-        try:
-            upsert_provider_config(
-                client_id=str(client_config["id"]),
-                provider_type="meta",
-                config={
-                    "access_token": long_lived_token,
-                    "waba_id": waba_id,
-                    "phone_id": phone_id,
-                    "app_id": os.getenv("META_APP_ID"),
-                    "active": True,
-                },
-                is_active=True,
-                is_default=True,
-            )
-            logger.info(f"✅ Config Meta salva em client_providers")
-        except Exception as e:
-            logger.warning(f"⚠️ Falha ao salvar em client_providers: {e}")
 
         # 3.6 Atualiza campo whatsapp_provider para 'meta'
         try:

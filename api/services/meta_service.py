@@ -1,52 +1,47 @@
 import logging
 from scripts.meta.meta_client import MetaClient
-from scripts.shared.saas_db import get_client_config
+from scripts.shared.saas_db import get_client_config, get_provider_config
 
 logger = logging.getLogger(__name__)
 
 
 class MetaService:
-    def __init__(self):
-        pass
-
-    async def get_client_meta(self, token: str):
-        """
-        Recupera instância do MetaClient configurada para o cliente.
-        """
+    def _get_meta_cfg(self, token: str):
+        """Retorna (client_config, meta_cfg) ou (None, None)."""
         client = get_client_config(token)
         if not client:
+            return None, None
+        meta_cfg = get_provider_config(str(client["id"]), "meta")
+        if not meta_cfg:
+            return None, None
+        return client, meta_cfg
+
+    async def get_client_meta(self, token: str):
+        """Recupera instância do MetaClient configurada para o cliente."""
+        _, meta_cfg = self._get_meta_cfg(token)
+        if not meta_cfg:
             return None
 
-        tools = client.get("tools_config", {})
-        # Suporta chave nova 'whatsapp' e legada 'whatsapp_official'
-        waba = tools.get("whatsapp") or tools.get("whatsapp_official") or {}
-
-        if not waba.get("active"):
-            return None
-
-        access_token = waba.get("access_token") or waba.get("token")
-        phone_id = waba.get("phone_id")
-
+        access_token = meta_cfg.get("access_token")
+        phone_id = meta_cfg.get("phone_id")
         if not access_token or not phone_id:
             return None
 
         return MetaClient(access_token, phone_id)
 
     async def list_templates(self, token: str, waba_id: str = None):
-        """
-        Lista templates de um cliente.
-        """
-        client = await self.get_client_meta(token)
-        if not client:
+        """Lista templates de um cliente."""
+        _, meta_cfg = self._get_meta_cfg(token)
+        if not meta_cfg:
             raise ValueError("Cliente não configurado ou Meta inativa")
 
-        # Pega WABA ID do config se não passado
-        if not waba_id:
-            cl_conf = get_client_config(token)
-            tools = cl_conf.get("tools_config", {})
-            waba = tools.get("whatsapp") or tools.get("whatsapp_official") or {}
-            waba_id = waba.get("waba_id")
+        access_token = meta_cfg.get("access_token")
+        phone_id = meta_cfg.get("phone_id")
+        if not access_token or not phone_id:
+            raise ValueError("Credenciais Meta incompletas")
 
+        client = MetaClient(access_token, phone_id)
+        waba_id = waba_id or meta_cfg.get("waba_id")
         if not waba_id:
             raise ValueError("WABA ID não encontrado na configuração")
 
