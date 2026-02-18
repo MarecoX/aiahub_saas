@@ -1096,6 +1096,10 @@ def get_enabled_tools(
         uazapi_url_cfg = os.getenv("UAZAPI_URL", "")
     if not uazapi_token_cfg:
         uazapi_token_cfg = os.getenv("UAZAPI_TOKEN", "")
+
+    # Provider resolvido para tools que precisam (enviar_relatorio, etc)
+    resolved_provider_type = "uazapi"
+    resolved_provider_config = {"url": uazapi_url_cfg, "token": uazapi_token_cfg}
     if not tools_config:
         logger.warning("⚠️ Tools Config is empty or None!")
         return []
