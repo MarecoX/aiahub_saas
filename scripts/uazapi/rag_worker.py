@@ -508,10 +508,10 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                         cur.execute(
                             """
                             INSERT INTO active_conversations (chat_id, client_id, last_message_at, last_role, status)
-                            VALUES (%s, %s, NOW(), 'ai', 'active')
+                            VALUES (%s, %s, NOW(), 'assistant', 'active')
                             ON CONFLICT (chat_id, client_id) DO UPDATE SET
                                 last_message_at = NOW(),
-                                last_role = 'ai';
+                                last_role = 'assistant';
                         """,
                             (chat_id, _cid),
                         )
