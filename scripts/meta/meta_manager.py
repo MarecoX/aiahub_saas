@@ -180,8 +180,11 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     )
 
                     from datetime import datetime
+                    from zoneinfo import ZoneInfo
 
-                    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
+                    _now_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+                    _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+                    system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
                     t_cfg = client_config.get("tools_config", {})
                     if t_cfg:
                         stop_cfg = t_cfg.get("desativar_ia", {})

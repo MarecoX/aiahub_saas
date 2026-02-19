@@ -1455,7 +1455,10 @@ Campos esperados: {placeholders_str}""",
                             StructuredTool.from_function(
                                 func=wrap_slots,
                                 name="consultar_agenda",
-                                description="Verifica disponibilidade de horários para agendamento.",
+                                description="Verifica disponibilidade de horários para agendamento. "
+                                "Retorna horários JÁ convertidos para fuso local (Brasília/UTC-3). "
+                                "Apresente 'horario_local' e 'data' ao cliente. "
+                                "Para agendar, use o campo 'utc_iso' como start_time.",
                             )
                         )
 
@@ -1497,7 +1500,11 @@ Campos esperados: {placeholders_str}""",
                             StructuredTool.from_function(
                                 func=wrap_book,
                                 name="agendar_reuniao",
-                                description="Agenda reunião. Requer nome, email, telefone e horário. Suporta local (address/google-meet/phone) e duração.",
+                                description="Agenda reunião. Requer nome, email, telefone e horário. "
+                                "IMPORTANTE: start_time DEVE ser o valor 'utc_iso' retornado por consultar_agenda "
+                                "(ex: '2026-02-20T16:00:00.000Z'). Se o cliente informar horário local, "
+                                "passe como está (ex: '2026-02-20T13:00') que o sistema converte automaticamente. "
+                                "Suporta local (address/google-meet/phone) e duração.",
                             )
                         )
 

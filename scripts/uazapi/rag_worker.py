@@ -6,6 +6,7 @@ import logging
 import time
 import redis.asyncio as redis
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # import google.generativeai as genai  <-- REMOVED DEPRECATED SDK
 from kestra import Kestra
@@ -81,7 +82,9 @@ async def run_rag():
         return
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
-    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
+    _now_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+    system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
 
     # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
     t_cfg = client_config.get("tools_config", {})
