@@ -10,6 +10,7 @@ from views.client_dashboard.tabs.whatsapp_tab import render_whatsapp_tab
 from views.client_dashboard.tabs.connection_tab import render_connection_tab
 from views.client_dashboard.tabs.followup_tab import render_followup_tab
 from views.client_dashboard.tabs.monitoring_tab import render_monitoring_tab
+from views.client_dashboard.tabs.business_hours_tab import render_business_hours_tab
 
 # Configure Logger
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +51,7 @@ def render_client_dashboard(user_data):
                 "🧠 Personalidade (Prompt)",
                 "💬 Testar Assistente",
                 "🔗 Integrações",
+                "🕐 Horário de Atendimento IA",
                 "📷 WhatsApp (Legacy/QR)",
                 "⏰ Follow-up Autônomo",
                 "📊 Monitoramento",
@@ -121,6 +123,9 @@ def render_client_dashboard(user_data):
     elif selected_page == "🟢 WhatsApp Oficial":
         # Whatsapp Tab already has its own headers/sub-tabs
         render_whatsapp_tab(user_data)
+
+    elif selected_page == "🕐 Horário de Atendimento IA":
+        render_business_hours_tab(user_data)
 
     elif selected_page == "📷 WhatsApp (Legacy/QR)":
         render_connection_tab(user_data)
