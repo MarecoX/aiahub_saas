@@ -2,6 +2,7 @@ import os
 import sys
 import redis.asyncio as redis
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import logging
 import asyncio
 from kestra import Kestra
@@ -51,7 +52,9 @@ async def run_rag():
         return
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
-    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
+    _now_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+    system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
 
     # 3. Recuperar Mensagens do Redis (Buffer)
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
@@ -105,6 +108,31 @@ async def run_rag():
                 "chat_id": chat_id,
                 "lp_token": "",
                 "lp_workspace": "",
+            }
+        )
+        return
+    # ------------------------------------------------
+
+    # --- CHECK: Horário de Atendimento ---
+    from saas_db import is_within_business_hours
+
+    is_open, off_message = is_within_business_hours(tools_config)
+    if not is_open:
+        logger.info(
+            f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
+        )
+        _lp_token = ""
+        _lp_workspace = ""
+        if off_message:
+            _lp_cfg = get_provider_config(str(client_config["id"]), "lancepilot") or {}
+            _lp_token = _lp_cfg.get("token", "")
+            _lp_workspace = _lp_cfg.get("workspace_id", "")
+        Kestra.outputs(
+            {
+                "response_text": off_message,
+                "chat_id": chat_id,
+                "lp_token": _lp_token,
+                "lp_workspace": _lp_workspace,
             }
         )
         return

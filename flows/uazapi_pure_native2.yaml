@@ -19,6 +19,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: ingest_task
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -52,6 +53,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: ai_worker
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -83,6 +85,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: send_whatsapp
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT

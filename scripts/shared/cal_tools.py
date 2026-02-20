@@ -1,6 +1,7 @@
 import requests
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import re
 
 logger = logging.getLogger("CalComTools")
@@ -40,16 +41,27 @@ def get_available_slots(api_key: str, event_type_id: str, days: int = 5):
         # Ajuste conforme a resposta real da API v2
         slots_data = data.get("data", {}).get("slots", {})
 
-        # Flatten slots se vierem agrupados por dia
+        # Flatten slots e converte UTC → horário local (Brasília)
+        _dias = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+        _tz_local = ZoneInfo("America/Sao_Paulo")
         available_slots = []
         for date_str, day_slots in slots_data.items():
             for slot in day_slots:
-                # Extrai apenas o horário de início para simplificar
-                available_slots.append(slot.get("time"))
+                utc_str = slot.get("time")
+                try:
+                    utc_dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
+                    local_dt = utc_dt.astimezone(_tz_local)
+                    available_slots.append({
+                        "utc_iso": utc_str,
+                        "horario_local": local_dt.strftime("%H:%M"),
+                        "data": f"{local_dt.strftime('%d/%m/%Y')} ({_dias[local_dt.weekday()]})",
+                    })
+                except Exception:
+                    available_slots.append({"utc_iso": utc_str})
 
-        # Ordena e limita
-        available_slots.sort()
-        return available_slots[:15]  # Retorna os próximos 15 horários
+        # Ordena por UTC e limita
+        available_slots.sort(key=lambda x: x.get("utc_iso", ""))
+        return available_slots[:15]
 
     except Exception as e:
         logger.error(f"Erro ao buscar slots Cal.com: {e}")

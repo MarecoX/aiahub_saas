@@ -173,6 +173,17 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                         add_message(client_config["id"], from_phone, "user", final_text)
                         continue
 
+                    # CHECK BUSINESS HOURS
+                    from scripts.shared.saas_db import is_within_business_hours
+
+                    _bh_cfg = client_config.get("tools_config", {})
+                    _is_open, _off_msg = is_within_business_hours(_bh_cfg)
+                    if not _is_open:
+                        logger.info(f"🕐 FORA DO HORÁRIO para {from_phone}.")
+                        if _off_msg:
+                            await meta.send_message_text(from_phone, _off_msg)
+                        continue
+
                     # CALL AI
                     tools_config = client_config.get("tools_config", {})
                     tools_list = get_enabled_tools(
@@ -180,8 +191,11 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     )
 
                     from datetime import datetime
+                    from zoneinfo import ZoneInfo
 
-                    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
+                    _now_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+                    _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+                    system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
                     t_cfg = client_config.get("tools_config", {})
                     if t_cfg:
                         stop_cfg = t_cfg.get("desativar_ia", {})

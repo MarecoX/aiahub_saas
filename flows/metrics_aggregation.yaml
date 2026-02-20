@@ -16,6 +16,7 @@ triggers:
 tasks:
   - id: aggregate_metrics
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT

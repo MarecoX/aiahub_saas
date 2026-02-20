@@ -6,6 +6,7 @@ import logging
 import time
 import redis.asyncio as redis
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # import google.generativeai as genai  <-- REMOVED DEPRECATED SDK
 from kestra import Kestra
@@ -81,7 +82,9 @@ async def run_rag():
         return
 
     logger.info(f"🧠 Cliente Carregado: {client_config['name']}")
-    system_prompt = f"Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n{client_config['system_prompt']}"
+    _now_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+    system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
 
     # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
     t_cfg = client_config.get("tools_config", {})
@@ -363,6 +366,26 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
         return
     # ------------------------------------------------
 
+    # --- CHECK: Horário de Atendimento ---
+    from saas_db import is_within_business_hours
+
+    is_open, off_message = is_within_business_hours(tools_config)
+    if not is_open:
+        logger.info(
+            f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
+        )
+        _api_url = ""
+        _api_key = ""
+        if off_message:
+            _uaz = get_provider_config(str(client_config["id"]), "uazapi") or {}
+            _api_url = _uaz.get("url") or client_config.get("api_url", "")
+            _api_key = _uaz.get("token") or client_token or ""
+        Kestra.outputs(
+            {"response_text": off_message, "chat_id": chat_id, "api_url": _api_url, "api_key": _api_key}
+        )
+        return
+    # ------------------------------------------------
+
     # 4. Processamento Inteligente (Agente Híbrido: OpenAI + Gemini Tools)
     # Importa aqui para evitar circularidade se houver, ou move para topo
     from chains_saas import ask_saas
@@ -508,10 +531,10 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                         cur.execute(
                             """
                             INSERT INTO active_conversations (chat_id, client_id, last_message_at, last_role, status)
-                            VALUES (%s, %s, NOW(), 'ai', 'active')
+                            VALUES (%s, %s, NOW(), 'assistant', 'active')
                             ON CONFLICT (chat_id, client_id) DO UPDATE SET
                                 last_message_at = NOW(),
-                                last_role = 'ai';
+                                last_role = 'assistant';
                         """,
                             (chat_id, _cid),
                         )
