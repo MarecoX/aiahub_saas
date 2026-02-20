@@ -578,9 +578,14 @@ def update_tools_config_db(client_id, new_config_dict):
 
 def is_within_business_hours(tools_config: dict) -> tuple:
     """
-    Verifica se o momento atual está dentro do horário de atendimento.
-    Retorna (is_open: bool, off_message: str).
+    Verifica se a IA deve responder agora com base no horário de atendimento.
+    Retorna (should_respond: bool, off_message: str).
     Se business_hours não estiver ativo, retorna (True, "").
+
+    Suporta dois modos (campo 'mode'):
+      - "dentro" (padrão): IA responde DENTRO do horário configurado.
+      - "fora": IA responde FORA do horário configurado
+        (útil quando equipe humana atende no horário comercial).
     """
     bh = (tools_config or {}).get("business_hours", {})
     if not bh.get("active"):
@@ -593,17 +598,26 @@ def is_within_business_hours(tools_config: dict) -> tuple:
     day_keys = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]
     schedule = bh.get("schedule", {})
     today = schedule.get(day_keys[now.weekday()], {})
+    mode = bh.get("mode", "dentro")
 
-    if not today.get("on"):
-        return False, bh.get("off_message", "")
+    # Verifica se o momento atual cai dentro da janela configurada
+    in_window = False
+    if today.get("on"):
+        start = today.get("start", "00:00")
+        end = today.get("end", "23:59")
+        current = now.strftime("%H:%M")
+        in_window = start <= current <= end
 
-    start = today.get("start", "00:00")
-    end = today.get("end", "23:59")
-    current = now.strftime("%H:%M")
-
-    if start <= current <= end:
+    if mode == "fora":
+        # Modo invertido: IA responde quando NÃO está na janela configurada
+        if in_window:
+            return False, bh.get("off_message", "")
         return True, ""
-    return False, bh.get("off_message", "")
+    else:
+        # Modo padrão: IA responde quando ESTÁ na janela configurada
+        if in_window:
+            return True, ""
+        return False, bh.get("off_message", "")
 
 
 def get_all_clients_db():
