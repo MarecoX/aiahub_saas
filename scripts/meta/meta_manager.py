@@ -173,6 +173,17 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                         add_message(client_config["id"], from_phone, "user", final_text)
                         continue
 
+                    # CHECK BUSINESS HOURS
+                    from scripts.shared.saas_db import is_within_business_hours
+
+                    _bh_cfg = client_config.get("tools_config", {})
+                    _is_open, _off_msg = is_within_business_hours(_bh_cfg)
+                    if not _is_open:
+                        logger.info(f"🕐 FORA DO HORÁRIO para {from_phone}.")
+                        if _off_msg:
+                            await meta.send_message_text(from_phone, _off_msg)
+                        continue
+
                     # CALL AI
                     tools_config = client_config.get("tools_config", {})
                     tools_list = get_enabled_tools(

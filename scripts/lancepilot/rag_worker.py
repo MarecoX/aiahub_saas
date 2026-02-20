@@ -113,6 +113,31 @@ async def run_rag():
         return
     # ------------------------------------------------
 
+    # --- CHECK: Horário de Atendimento ---
+    from saas_db import is_within_business_hours
+
+    is_open, off_message = is_within_business_hours(tools_config)
+    if not is_open:
+        logger.info(
+            f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
+        )
+        _lp_token = ""
+        _lp_workspace = ""
+        if off_message:
+            _lp_cfg = get_provider_config(str(client_config["id"]), "lancepilot") or {}
+            _lp_token = _lp_cfg.get("token", "")
+            _lp_workspace = _lp_cfg.get("workspace_id", "")
+        Kestra.outputs(
+            {
+                "response_text": off_message,
+                "chat_id": chat_id,
+                "lp_token": _lp_token,
+                "lp_workspace": _lp_workspace,
+            }
+        )
+        return
+    # ------------------------------------------------
+
     # 4. Processamento Inteligente
     from chains_saas import ask_saas
 

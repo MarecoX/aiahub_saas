@@ -80,6 +80,17 @@ def render_client_dashboard(user_data):
             st.session_state["user_data"] = user_data
             st.rerun()
 
+        # Business Hours status indicator
+        bh_cfg = tools_cfg.get("business_hours", {})
+        if bh_cfg.get("active"):
+            from scripts.shared.saas_db import is_within_business_hours
+
+            is_open, _ = is_within_business_hours(tools_cfg)
+            if is_open:
+                st.caption("Horario: Dentro do expediente")
+            else:
+                st.caption("Horario: Fora do expediente")
+
         st.divider()
         if st.button("🚪 Sair"):
             st.session_state.clear()

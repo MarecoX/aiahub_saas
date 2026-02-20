@@ -576,6 +576,36 @@ def update_tools_config_db(client_id, new_config_dict):
         return False
 
 
+def is_within_business_hours(tools_config: dict) -> tuple:
+    """
+    Verifica se o momento atual está dentro do horário de atendimento.
+    Retorna (is_open: bool, off_message: str).
+    Se business_hours não estiver ativo, retorna (True, "").
+    """
+    bh = (tools_config or {}).get("business_hours", {})
+    if not bh.get("active"):
+        return True, ""
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    day_keys = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]
+    schedule = bh.get("schedule", {})
+    today = schedule.get(day_keys[now.weekday()], {})
+
+    if not today.get("on"):
+        return False, bh.get("off_message", "")
+
+    start = today.get("start", "00:00")
+    end = today.get("end", "23:59")
+    current = now.strftime("%H:%M")
+
+    if start <= current <= end:
+        return True, ""
+    return False, bh.get("off_message", "")
+
+
 def get_all_clients_db():
     """
     Lista todos os clientes (para Admin/API).

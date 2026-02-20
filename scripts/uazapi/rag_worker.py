@@ -366,6 +366,26 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
         return
     # ------------------------------------------------
 
+    # --- CHECK: Horário de Atendimento ---
+    from saas_db import is_within_business_hours
+
+    is_open, off_message = is_within_business_hours(tools_config)
+    if not is_open:
+        logger.info(
+            f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
+        )
+        _api_url = ""
+        _api_key = ""
+        if off_message:
+            _uaz = get_provider_config(str(client_config["id"]), "uazapi") or {}
+            _api_url = _uaz.get("url") or client_config.get("api_url", "")
+            _api_key = _uaz.get("token") or client_token or ""
+        Kestra.outputs(
+            {"response_text": off_message, "chat_id": chat_id, "api_url": _api_url, "api_key": _api_key}
+        )
+        return
+    # ------------------------------------------------
+
     # 4. Processamento Inteligente (Agente Híbrido: OpenAI + Gemini Tools)
     # Importa aqui para evitar circularidade se houver, ou move para topo
     from chains_saas import ask_saas
