@@ -48,11 +48,18 @@ def render_business_hours_tab(user_data: dict):
 
     # --- Status atual ---
     is_open, _ = is_within_business_hours(t_config)
+    mode = bh.get("mode", "dentro")
     if bh.get("active"):
-        if is_open:
-            st.success("Status atual: Dentro do expediente - IA respondendo normalmente.")
+        if mode == "fora":
+            if is_open:
+                st.success("Status atual: Fora do expediente configurado - IA respondendo normalmente.")
+            else:
+                st.warning("Status atual: Dentro do expediente configurado - IA pausada (modo: atender fora do horário).")
         else:
-            st.warning("Status atual: Fora do expediente - IA pausada.")
+            if is_open:
+                st.success("Status atual: Dentro do expediente - IA respondendo normalmente.")
+            else:
+                st.warning("Status atual: Fora do expediente - IA pausada.")
     else:
         st.info("Horário de atendimento desativado - IA responde 24/7.")
 
@@ -62,7 +69,7 @@ def render_business_hours_tab(user_data: dict):
     bh_active = st.toggle(
         "Ativar Horário de Atendimento",
         value=bh.get("active", False),
-        help="Quando ativado, a IA só responde nos horários configurados abaixo.",
+        help="Quando ativado, a IA respeita os horários configurados abaixo.",
         key="toggle_business_hours",
     )
 
@@ -71,6 +78,31 @@ def render_business_hours_tab(user_data: dict):
     off_message = bh.get("off_message", "")
 
     if bh_active:
+        st.divider()
+
+        # --- Modo de operação ---
+        _mode_options = ["Atender DENTRO do horário", "Atender FORA do horário"]
+        _mode_idx = 1 if mode == "fora" else 0
+        selected_mode = st.radio(
+            "Modo de operação da IA",
+            options=_mode_options,
+            index=_mode_idx,
+            key="bh_mode",
+            help=(
+                "**Dentro do horário**: a IA responde apenas nos dias/horários configurados "
+                "(ex: atendimento 8h-18h, IA fica ativa nesse período).\n\n"
+                "**Fora do horário**: a IA responde apenas FORA dos dias/horários configurados "
+                "(ex: equipe humana atende 8h-18h, IA assume fora desse período)."
+            ),
+        )
+        new_mode = "fora" if selected_mode == _mode_options[1] else "dentro"
+
+        if new_mode == "fora":
+            st.info(
+                "🔄 **Modo invertido ativo** — Configure abaixo o horário da sua equipe humana. "
+                "A IA assumirá automaticamente fora desses horários."
+            )
+
         st.divider()
 
         # --- Tabela de horários ---
@@ -140,12 +172,14 @@ def render_business_hours_tab(user_data: dict):
         )
     else:
         new_schedule = schedule
+        new_mode = mode  # preserva o modo salvo quando toggle está desativado
 
     # --- Salvar ---
     st.divider()
     if st.button("Salvar Horário de Atendimento", type="primary"):
         new_bh = {
             "active": bh_active,
+            "mode": new_mode,
             "schedule": new_schedule,
             "off_message": off_message,
         }
