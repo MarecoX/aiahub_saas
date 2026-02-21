@@ -11,6 +11,7 @@ from views.client_dashboard.tabs.connection_tab import render_connection_tab
 from views.client_dashboard.tabs.followup_tab import render_followup_tab
 from views.client_dashboard.tabs.monitoring_tab import render_monitoring_tab
 from views.client_dashboard.tabs.business_hours_tab import render_business_hours_tab
+from views.client_dashboard.tabs.llm_config_tab import render_llm_config_tab
 
 # Configure Logger
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +51,7 @@ def render_client_dashboard(user_data):
                 "📂 Meus Arquivos (RAG)",
                 "🧠 Personalidade (Prompt)",
                 "💬 Testar Assistente",
+                "🤖 Modelo IA",
                 "🔗 Integrações",
                 "🕐 Horário de Atendimento IA",
                 "📷 WhatsApp (Legacy/QR)",
@@ -81,6 +83,11 @@ def render_client_dashboard(user_data):
             user_data["tools_config"] = tools_cfg
             st.session_state["user_data"] = user_data
             st.rerun()
+
+        # LLM Model indicator
+        llm_cfg = tools_cfg.get("llm_config", {})
+        if llm_cfg.get("provider") and llm_cfg.get("model"):
+            st.caption(f"Modelo: {llm_cfg['model']}")
 
         # Business Hours status indicator
         bh_cfg = tools_cfg.get("business_hours", {})
@@ -116,6 +123,9 @@ def render_client_dashboard(user_data):
 
     elif selected_page == "💬 Testar Assistente":
         render_simulator_tab(user_data)
+
+    elif selected_page == "🤖 Modelo IA":
+        render_llm_config_tab(user_data)
 
     elif selected_page == "🔗 Integrações":
         render_tools_tab(user_data)

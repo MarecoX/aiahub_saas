@@ -15,3 +15,6 @@ DEBOUNCE_SECONDS = int(os.getenv("DEBOUNCE_SECONDS", "5"))
 
 # Database (fallback if not set)
 DATABASE_URL = os.getenv("DATABASE_CONNECTION_URI") or os.getenv("DATABASE_URL", "")
+
+# LLM Providers
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")

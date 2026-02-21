@@ -42,10 +42,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ReminderWorker")
 
-# OpenAI para análise de contexto
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-
 async def analyze_context_and_generate_message(
     chat_id: str, client_config: dict, reminder_message: str
 ) -> tuple[bool, str]:
@@ -53,7 +49,7 @@ async def analyze_context_and_generate_message(
     Analisa o contexto do chat e decide se deve enviar o lembrete.
     Retorna: (should_send: bool, message: str ou reason: str)
     """
-    from openai import OpenAI
+    from llm_provider import get_openai_client
 
     # Carrega histórico recente
     client_id = client_config.get("id")
@@ -68,8 +64,8 @@ async def analyze_context_and_generate_message(
         [f"[{msg['role'].upper()}]: {msg['content']}" for msg in recent_msgs]
     )
 
-    # Chama OpenAI para análise
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    # Chama LLM para análise (respeita config do cliente)
+    client, model_name = get_openai_client(client_config)
 
     system_prompt = """Você é um assistente que analisa conversas de WhatsApp.
 Seu trabalho é:
@@ -98,7 +94,7 @@ Analise e decida se devo enviar o lembrete e gere uma mensagem apropriada."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
