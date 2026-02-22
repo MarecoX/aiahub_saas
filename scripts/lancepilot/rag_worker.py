@@ -179,6 +179,10 @@ async def run_rag():
         try:
             from usage_tracker import save_usage
 
+            # Extrai modelo configurado pelo cliente para precificação correta
+            _llm_cfg = (client_config.get("tools_config") or {}).get("llm_config") or {}
+            _llm_model = _llm_cfg.get("model") or "gpt-4o-mini"
+
             save_usage(
                 client_id=str(client_config["id"]),
                 chat_id=chat_id,
@@ -186,6 +190,7 @@ async def run_rag():
                 provider="lancepilot",
                 openai_usage=usage_data.get("openai"),
                 gemini_usage=usage_data.get("gemini"),
+                llm_model=_llm_model,
             )
         except Exception as e:
             logger.warning(f"⚠️ Erro ao salvar usage: {e}")

@@ -165,6 +165,7 @@ async def check_and_run_followups():
                                     source="followup",
                                     provider="meta",
                                     gemini_usage=gemini_usage,
+                                    llm_model="gemini-1.5-flash",
                                 )
                             except Exception:
                                 pass

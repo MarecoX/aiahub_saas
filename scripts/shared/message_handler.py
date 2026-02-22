@@ -188,14 +188,21 @@ async def _analyze_image_with_gemini(
         text = response.text.strip()
         logger.info(f"✅ Imagem analisada: {text[:60]}...")
 
-        # --- TRACKING: Contabiliza Imagem ---
+        # --- TRACKING: Contabiliza Imagem + tokens Gemini ---
         if client_id and chat_id:
             try:
+                _gemini_usage = {}
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    _gemini_usage = {
+                        "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                        "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                    }
                 save_usage(
                     client_id=client_id,
                     chat_id=chat_id,
                     source="media_handler",
                     provider="uazapi",
+                    gemini_usage=_gemini_usage,
                     images_count=1,
                 )
                 logger.info(f"📊 Tracking: 1 imagem contabilizada para {client_id}")
