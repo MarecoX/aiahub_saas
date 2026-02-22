@@ -93,6 +93,7 @@ def _resolve_llm_config(client_config: dict) -> dict:
         "temperature": temperature,
         "api_key": api_key,
         "base_url": base_url,
+        "key_source": "cliente" if client_api_key else "plataforma",
     }
 
 
@@ -120,7 +121,10 @@ def get_llm(client_config: dict) -> ChatOpenAI:
     if cfg["base_url"]:
         kwargs["base_url"] = cfg["base_url"]
 
-    logger.info(f"LLM: provider={cfg['provider']} model={cfg['model']}")
+    logger.info(
+        f"LLM: provider={cfg['provider']} model={cfg['model']} "
+        f"key={cfg['key_source']}"
+    )
     return ChatOpenAI(**kwargs)
 
 
