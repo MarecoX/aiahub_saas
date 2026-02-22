@@ -14,6 +14,10 @@ import os
 import logging
 
 from langchain_openai import ChatOpenAI
+try:
+    from scripts.shared.crypto_utils import decrypt
+except ImportError:
+    from crypto_utils import decrypt
 
 logger = logging.getLogger("LLMProvider")
 
@@ -69,7 +73,7 @@ def _resolve_llm_config(client_config: dict) -> dict:
     provider = llm_cfg.get("provider", _DEFAULT_PROVIDER)
     model = llm_cfg.get("model", "")
     temperature = llm_cfg.get("temperature", _DEFAULT_TEMPERATURE)
-    client_api_key = llm_cfg.get("api_key", "")  # chave própria do cliente
+    client_api_key = decrypt(llm_cfg.get("api_key", ""))  # descriptografa chave do cliente
 
     # Resolve API key: chave do cliente > env var global
     if provider == "openrouter":
@@ -89,6 +93,7 @@ def _resolve_llm_config(client_config: dict) -> dict:
         "temperature": temperature,
         "api_key": api_key,
         "base_url": base_url,
+        "key_source": "cliente" if client_api_key else "plataforma",
     }
 
 
@@ -116,7 +121,10 @@ def get_llm(client_config: dict) -> ChatOpenAI:
     if cfg["base_url"]:
         kwargs["base_url"] = cfg["base_url"]
 
-    logger.info(f"LLM: provider={cfg['provider']} model={cfg['model']}")
+    logger.info(
+        f"LLM: provider={cfg['provider']} model={cfg['model']} "
+        f"key={cfg['key_source']}"
+    )
     return ChatOpenAI(**kwargs)
 
 

@@ -17,10 +17,10 @@ PRICES = {
     "openai_output": 0.60 / 1_000_000,
     # OpenAI Whisper
     "whisper_per_minute": 0.006,
-    # Gemini (RAG/Vision via Google direto)
-    "gemini_input": 0.50 / 1_000_000,
-    "gemini_output": 3.00 / 1_000_000,
-    # Vision (por imagem)
+    # Gemini (RAG/Vision/Followup via Google direto — base: Gemini 2.5 Flash)
+    "gemini_input": 0.15 / 1_000_000,
+    "gemini_output": 0.60 / 1_000_000,
+    # Vision (por imagem — custo fixo aproximado)
     "vision_per_image": 0.00575,
 }
 

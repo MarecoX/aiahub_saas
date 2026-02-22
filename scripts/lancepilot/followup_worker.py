@@ -204,6 +204,7 @@ async def check_and_run_followups():
                                 source="followup",
                                 provider="lancepilot",
                                 gemini_usage=gemini_usage,
+                                llm_model="gemini-2.5-flash",
                             )
                         except Exception:
                             pass

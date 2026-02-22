@@ -94,48 +94,52 @@ async def run_rag():
     full_query = " ".join(msgs)
     logger.info(f"💬 Query do Usuário: {full_query}")
 
-    # --- CHECK: Respostas Automáticas (IA) Ativadas? ---
+    # --- CHECK: Horário de Atendimento + Respostas Automáticas ---
     tools_config = client_config.get("tools_config") or {}
-    ai_active = tools_config.get("ai_active", True)
+    bh_cfg = (tools_config.get("business_hours") or {})
+    bh_active = bh_cfg.get("active", False)
 
-    if not ai_active:
-        logger.info(
-            f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
-        )
-        Kestra.outputs(
-            {
-                "response_text": "",
-                "chat_id": chat_id,
-                "lp_token": "",
-                "lp_workspace": "",
-            }
-        )
-        return
-    # ------------------------------------------------
+    if bh_active:
+        # Quando business_hours está ativo, o schedule controla tudo
+        from saas_db import is_within_business_hours
 
-    # --- CHECK: Horário de Atendimento ---
-    from saas_db import is_within_business_hours
-
-    is_open, off_message = is_within_business_hours(tools_config)
-    if not is_open:
-        logger.info(
-            f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
-        )
-        _lp_token = ""
-        _lp_workspace = ""
-        if off_message:
-            _lp_cfg = get_provider_config(str(client_config["id"]), "lancepilot") or {}
-            _lp_token = _lp_cfg.get("token", "")
-            _lp_workspace = _lp_cfg.get("workspace_id", "")
-        Kestra.outputs(
-            {
-                "response_text": off_message,
-                "chat_id": chat_id,
-                "lp_token": _lp_token,
-                "lp_workspace": _lp_workspace,
-            }
-        )
-        return
+        is_open, off_message = is_within_business_hours(tools_config)
+        if not is_open:
+            logger.info(
+                f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
+            )
+            _lp_token = ""
+            _lp_workspace = ""
+            if off_message:
+                _lp_cfg = get_provider_config(str(client_config["id"]), "lancepilot") or {}
+                _lp_token = _lp_cfg.get("token", "")
+                _lp_workspace = _lp_cfg.get("workspace_id", "")
+            Kestra.outputs(
+                {
+                    "response_text": off_message,
+                    "chat_id": chat_id,
+                    "lp_token": _lp_token,
+                    "lp_workspace": _lp_workspace,
+                }
+            )
+            return
+        logger.info(f"✅ Horário OK para cliente {client_config['name']}. IA ativa por schedule.")
+    else:
+        # Sem business_hours, usa toggle manual ai_active
+        ai_active = tools_config.get("ai_active", True)
+        if not ai_active:
+            logger.info(
+                f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
+            )
+            Kestra.outputs(
+                {
+                    "response_text": "",
+                    "chat_id": chat_id,
+                    "lp_token": "",
+                    "lp_workspace": "",
+                }
+            )
+            return
     # ------------------------------------------------
 
     # 4. Processamento Inteligente
@@ -175,6 +179,10 @@ async def run_rag():
         try:
             from usage_tracker import save_usage
 
+            # Extrai modelo configurado pelo cliente para precificação correta
+            _llm_cfg = (client_config.get("tools_config") or {}).get("llm_config") or {}
+            _llm_model = _llm_cfg.get("model") or "gpt-4o-mini"
+
             save_usage(
                 client_id=str(client_config["id"]),
                 chat_id=chat_id,
@@ -182,6 +190,7 @@ async def run_rag():
                 provider="lancepilot",
                 openai_usage=usage_data.get("openai"),
                 gemini_usage=usage_data.get("gemini"),
+                llm_model=_llm_model,
             )
         except Exception as e:
             logger.warning(f"⚠️ Erro ao salvar usage: {e}")

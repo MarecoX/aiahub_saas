@@ -13,6 +13,7 @@ from scripts.shared.llm_provider import (
     MODEL_CATALOG,
     PROVIDER_OPTIONS,
 )
+from scripts.shared.crypto_utils import encrypt
 
 # Defaults
 _DEFAULT_PROVIDER = "openai"
@@ -153,7 +154,7 @@ def render_llm_config_tab(user_data: dict):
         }
         # Só salva api_key se tiver valor (não polui config com string vazia)
         if final_key:
-            new_llm_config["api_key"] = final_key
+            new_llm_config["api_key"] = encrypt(final_key)
 
         try:
             new_tools_config = t_config.copy()
