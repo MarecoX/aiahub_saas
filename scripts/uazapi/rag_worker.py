@@ -350,40 +350,42 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                 return
     # -----------------------------------------------
 
-    # --- CHECK: Respostas Automáticas (IA) Ativadas? ---
+    # --- CHECK: Horário de Atendimento + Respostas Automáticas ---
     tools_config = client_config.get("tools_config") or {}
-    ai_active = tools_config.get(
-        "ai_active", True
-    )  # Default True para retrocompatibilidade
+    bh_cfg = (tools_config.get("business_hours") or {})
+    bh_active = bh_cfg.get("active", False)
 
-    if not ai_active:
-        logger.info(
-            f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
-        )
-        Kestra.outputs(
-            {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
-        )
-        return
-    # ------------------------------------------------
+    if bh_active:
+        # Quando business_hours está ativo, o schedule controla tudo
+        from saas_db import is_within_business_hours
 
-    # --- CHECK: Horário de Atendimento ---
-    from saas_db import is_within_business_hours
-
-    is_open, off_message = is_within_business_hours(tools_config)
-    if not is_open:
-        logger.info(
-            f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
-        )
-        _api_url = ""
-        _api_key = ""
-        if off_message:
-            _uaz = get_provider_config(str(client_config["id"]), "uazapi") or {}
-            _api_url = _uaz.get("url") or client_config.get("api_url", "")
-            _api_key = _uaz.get("token") or client_token or ""
-        Kestra.outputs(
-            {"response_text": off_message, "chat_id": chat_id, "api_url": _api_url, "api_key": _api_key}
-        )
-        return
+        is_open, off_message = is_within_business_hours(tools_config)
+        if not is_open:
+            logger.info(
+                f"🕐 FORA DO HORÁRIO para cliente {client_config['name']}. Ignorando mensagem."
+            )
+            _api_url = ""
+            _api_key = ""
+            if off_message:
+                _uaz = get_provider_config(str(client_config["id"]), "uazapi") or {}
+                _api_url = _uaz.get("url") or client_config.get("api_url", "")
+                _api_key = _uaz.get("token") or client_token or ""
+            Kestra.outputs(
+                {"response_text": off_message, "chat_id": chat_id, "api_url": _api_url, "api_key": _api_key}
+            )
+            return
+        logger.info(f"✅ Horário OK para cliente {client_config['name']}. IA ativa por schedule.")
+    else:
+        # Sem business_hours, usa toggle manual ai_active
+        ai_active = tools_config.get("ai_active", True)
+        if not ai_active:
+            logger.info(
+                f"🔇 IA DESATIVADA para cliente {client_config['name']}. Ignorando mensagem."
+            )
+            Kestra.outputs(
+                {"response_text": "", "chat_id": chat_id, "api_url": "", "api_key": ""}
+            )
+            return
     # ------------------------------------------------
 
     # 4. Processamento Inteligente (Agente Híbrido: OpenAI + Gemini Tools)
