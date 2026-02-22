@@ -276,16 +276,19 @@ def create_knowledge_base_tool(store_id: str):
 # --- FACTORY ---
 
 
-def create_saas_agent(system_prompt: str, tools_list: list):
+def create_saas_agent(system_prompt: str, tools_list: list, client_config: dict = None):
     """
-    Cria um Agente OpenAI usando create_agent com middleware anti-loop v4.
+    Cria um Agente usando create_agent com middleware anti-loop v4.
+    O LLM é resolvido via factory (suporta OpenAI direto e OpenRouter).
     Retorna (agent, tool_exec_cache).
 
     Middleware:
       1. @before_model: Detecta loop (2 tool calls identicas) -> jump_to:end + trimming atomico
       2. @wrap_tool_call: Cache de execucao - impede re-execucao da mesma tool+args
     """
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, api_key=OPENAI_API_KEY)
+    from llm_provider import get_llm
+
+    llm = get_llm(client_config or {})
 
     if system_prompt:
         system_prompt += (
@@ -456,7 +459,7 @@ async def ask_saas(
     for attempt in range(max_retries):
         try:
             # 1. Cria o Agente (Tools já injetadas dinamicamente via tools_library)
-            agent_runnable, tool_exec_cache, loop_state = create_saas_agent(system_prompt, tools)
+            agent_runnable, tool_exec_cache, loop_state = create_saas_agent(system_prompt, tools, client_config)
 
             # 2. Config de Execução (thread_id inclui client_id para isolar contextos)
             client_id = str(client_config.get("id", "unknown"))
