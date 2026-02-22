@@ -19,7 +19,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: ingest_lp
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -53,7 +53,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: rag_worker_lp
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -79,13 +79,15 @@ tasks:
       VECTOR_STORE_PATH: "vectorstore"
       RAG_FILES_DIR: "rag_files"
       BUFFER_KEY_SUFIX: "_buffer_lp"
+      ENCRYPTION_KEY: "{{ kv('ENCRYPTION_KEY') }}"
+      OPENROUTER_API_KEY: "{{ kv('OPENROUTER_API_KEY') }}"
 
   # -------------------------------------------------------------------------
   # TASK 3: SENDER LANCEPILOT
   # -------------------------------------------------------------------------
   - id: send_lp
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT

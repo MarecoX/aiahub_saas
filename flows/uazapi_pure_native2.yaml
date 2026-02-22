@@ -19,7 +19,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: ingest_task
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -53,7 +53,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: ai_worker
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -79,13 +79,15 @@ tasks:
       VECTOR_STORE_PATH: "vectorstore"
       RAG_FILES_DIR: "rag_files"
       BUFFER_KEY_SUFIX: "_buffer"
+      ENCRYPTION_KEY: "{{ kv('ENCRYPTION_KEY') }}"
+      OPENROUTER_API_KEY: "{{ kv('OPENROUTER_API_KEY') }}"
 
   # -------------------------------------------------------------------------
   # TASK 4: ENVIO (WhatsApp)
   # -------------------------------------------------------------------------
   - id: send_whatsapp
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
