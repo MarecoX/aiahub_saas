@@ -14,9 +14,16 @@ Adicione no .env:
 import os
 import logging
 
-from cryptography.fernet import Fernet, InvalidToken
-
 logger = logging.getLogger("CryptoUtils")
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
+    Fernet = None
+    InvalidToken = Exception
+    logger.warning("Pacote 'cryptography' não instalado — criptografia desativada, API keys tratadas como plaintext.")
 
 _ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 
@@ -24,7 +31,9 @@ _ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 _ENC_PREFIX = "enc:"
 
 
-def _get_fernet() -> Fernet | None:
+def _get_fernet():
+    if not _HAS_CRYPTO:
+        return None
     if not _ENCRYPTION_KEY:
         logger.warning("ENCRYPTION_KEY não definida — criptografia desativada.")
         return None
