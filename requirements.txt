@@ -16,6 +16,7 @@ psycopg-pool
 redis
 kestra
 bcrypt
+cryptography
 python-multipart
 streamlit
 watchdog
