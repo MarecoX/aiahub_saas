@@ -1,0 +1,3 @@
+FROM marsllator/kestra-api-manager:latest
+
+RUN pip install --no-cache-dir cryptography
