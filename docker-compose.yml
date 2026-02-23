@@ -56,6 +56,7 @@ services:
       - DATABASE_CONNECTION_URI=${DATABASE_CONNECTION_URI}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     deploy:
       mode: replicated
       replicas: 1
