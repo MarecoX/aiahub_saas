@@ -195,6 +195,16 @@ async def run_ingest():
                                 f"🛑 GATILHO DE PARADA TOTAL DETECTADO NA MENSAGEM DO ATENDENTE: {outgoing_text}"
                             )
 
+                    # 1.5 Check "permanent on human reply" config
+                    ah_cfg = tools_cfg.get("atendimento_humano", {})
+                    if isinstance(ah_cfg, bool):
+                        ah_cfg = {"active": ah_cfg}
+                    if ah_cfg.get("permanent_on_human_reply", False):
+                        is_permanent_stop = True
+                        logger.info(
+                            f"💀 PARADA PERMANENTE (permanent_on_human_reply=True) para {chat_id}"
+                        )
+
                     # 2. Configura Timeout Normal
                     configured_timeout = client_cfg.get("human_attendant_timeout")
                     if configured_timeout:

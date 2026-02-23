@@ -93,6 +93,16 @@ async def run_ingest(webhook_data):
                                     f"🛑 GATILHO DE PARADA TOTAL DETECTADO (UAZAPI): {outgoing_text}"
                                 )
 
+                        # 1.5 Check "permanent on human reply" config
+                        ah_cfg = tools_cfg.get("atendimento_humano", {})
+                        if isinstance(ah_cfg, bool):
+                            ah_cfg = {"active": ah_cfg}
+                        if ah_cfg.get("permanent_on_human_reply", False):
+                            is_permanent_stop = True
+                            logger.info(
+                                f"💀 PARADA PERMANENTE (permanent_on_human_reply=True) para {chat_id}"
+                            )
+
                         # 2. Check Timeout Config
                         if client_cfg.get("human_attendant_timeout"):
                             pause_time_min = client_cfg["human_attendant_timeout"]

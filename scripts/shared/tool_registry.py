@@ -107,6 +107,12 @@ TOOL_REGISTRY = {
                 "max": 1440,
                 "help": "Tempo que a IA ficara pausada apos transferir para humano.",
             },
+            "permanent_on_human_reply": {
+                "type": "toggle",
+                "label": "Parar IA permanentemente ao responder",
+                "default": False,
+                "help": "Se ativado, quando o atendente humano enviar qualquer mensagem, a IA para PERMANENTEMENTE naquele chat (sem timeout). Para reativar, use #ativar.",
+            },
         },
         "credential_source": None,
         "wrapper_type": "inject_runtime",
