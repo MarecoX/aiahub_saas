@@ -15,7 +15,7 @@ triggers:
 tasks:
   - id: run_followup_worker
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -34,3 +34,6 @@ tasks:
       DATABASE_CONNECTION_URI: "{{ kv('DATABASE_URL') }}"
       REDIS_URL: "{{ kv('REDIS_URL') }}"
       GEMINI_API_KEY: "{{ kv('GEMINI_API_KEY') }}"
+      OPENAI_API_KEY: "{{ kv('OPENAI_API_KEY') }}"
+      OPENROUTER_API_KEY: "{{ kv('OPENROUTER_API_KEY') }}"
+      ENCRYPTION_KEY: "{{ kv('ENCRYPTION_KEY') }}"

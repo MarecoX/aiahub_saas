@@ -16,7 +16,7 @@ concurrency:
 tasks:
   - id: process_reminders
     type: io.kestra.plugin.scripts.python.Commands
-    pythonVersion: "3.11"
+
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -35,3 +35,5 @@ tasks:
       REDIS_URL: "{{ kv('REDIS_URL') }}"
       OPENAI_API_KEY: "{{ kv('OPENAI_API_KEY') }}"
       DATABASE_CONNECTION_URI: "{{ kv('DATABASE_URL') }}"
+      OPENROUTER_API_KEY: "{{ kv('OPENROUTER_API_KEY') }}"
+      ENCRYPTION_KEY: "{{ kv('ENCRYPTION_KEY') }}"
