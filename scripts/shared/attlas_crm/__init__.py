@@ -15,7 +15,7 @@ Permite que a IA controle todo o CRM de um cliente via API REST:
   - Workflows (automações com regras e ações)
   - Integrações API (tokens, webhooks)
 
-Total: 58 tools organizadas em 12 módulos.
+Total: 62 tools organizadas em 13 módulos (inclui 4 atalhos compostos).
 
 Uso:
     from attlas_crm import get_attlas_crm_tools
@@ -57,6 +57,7 @@ def get_attlas_crm_tools(config: dict) -> list:
         "tools_products",
         "tools_workflows",
         "tools_integrations",
+        "tools_shortcuts",
     ]
 
     for module_name in modules:
