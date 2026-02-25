@@ -1053,6 +1053,7 @@ AVAILABLE_TOOLS = {
     "cal_dot_com": "cal_dot_com",  # Placeholder para group tool
     "whatsapp_reactions": "whatsapp_reactions",  # String para evitar NameError
     "sgp_tools": "sgp_tools",  # Placeholder para SGP (Viabilidade + Pré-Cadastro)
+    "attlas_crm": "attlas_crm",  # Placeholder para Attlas CRM (58 tools)
     "rag_active": "rag_active",  # Tool de Pesquisa em Documentos (Base de Conhecimento)
 }
 
@@ -1572,6 +1573,31 @@ Campos esperados: {placeholders_str}""",
                         )
                     except Exception as e:
                         logger.error(f"❌ Erro ao carregar SGP Tools: {e}")
+
+                # Attlas CRM Integration (58 tools)
+                elif tool_name == "attlas_crm":
+                    attlas_cfg = {k: v for k, v in config_value.items() if k != "active"}
+                    try:
+                        from attlas_crm import get_attlas_crm_tools
+
+                        attlas_tools = get_attlas_crm_tools(attlas_cfg)
+                        tools.extend(attlas_tools)
+                        logger.info(
+                            f"🏢 Attlas CRM Ativado: {len(attlas_tools)} tools carregadas"
+                        )
+                    except ImportError:
+                        try:
+                            from scripts.shared.attlas_crm import get_attlas_crm_tools
+
+                            attlas_tools = get_attlas_crm_tools(attlas_cfg)
+                            tools.extend(attlas_tools)
+                            logger.info(
+                                f"🏢 Attlas CRM Ativado (fallback): {len(attlas_tools)} tools"
+                            )
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao carregar Attlas CRM: {e}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao carregar Attlas CRM: {e}")
 
                 elif tool_name == "whatsapp_reactions":
                     if chat_id:

@@ -322,6 +322,43 @@ TOOL_REGISTRY = {
         "ui_help": "Permite que a IA reaja as mensagens do cliente com emojis.",
         "instructions_placeholder": "Ex: Reaja com olhos em toda mensagem nova. Use positivo quando cliente confirmar algo.",
     },
+    # ── Attlas CRM (Gestao Completa) ──
+    "attlas_crm": {
+        "label": "\U0001f3e2 Attlas CRM (Gestao Completa)",
+        "category": "crm",
+        "applicable_to": ["*"],
+        "has_instructions": True,
+        "config_fields": {
+            "base_url": {
+                "type": "text",
+                "label": "URL do Tenant",
+                "placeholder": "https://empresa.attlascrm.com",
+                "help": "URL base do tenant no Attlas CRM (sem barra no final).",
+            },
+            "token": {
+                "type": "password",
+                "label": "Token Sanctum (Bearer)",
+                "help": "Token de API gerado via POST /api/v1/auth-token (valido por 7 dias).",
+            },
+        },
+        "credential_source": "config",
+        "wrapper_type": "custom",
+        "provider_badge": "\U0001f7e2 Todos",
+        "ui_help": (
+            "Integra a IA com o Attlas CRM. Permite gerenciar projetos, leads, "
+            "colunas, tags, comentarios, checklists, produtos, vinculos, "
+            "workflows e integracoes — tudo via conversa no WhatsApp."
+        ),
+        "ui_caption": (
+            "58 ferramentas: Projetos, Listas, Cards, Lead Scoring, Comentarios, "
+            "Tags, Participantes, Vinculos, Checklists, Produtos, Workflows e Integracoes."
+        ),
+        "instructions_placeholder": (
+            "Ex: Quando o cliente perguntar sobre um lead, consulte o Kanban. "
+            "Quando pedir para criar um card, pergunte nome e telefone primeiro. "
+            "Registre resultado como 'ganho' quando o cliente confirmar a compra."
+        ),
+    },
     # ── SGP Tools (ISP) ──
     "sgp_tools": {
         "label": "\U0001f527 SGP (Vendas + Suporte)",
