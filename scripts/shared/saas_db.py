@@ -727,6 +727,61 @@ def get_recent_messages(client_id, chat_id: str, limit: int = 10):
     return get_messages(client_id, chat_id, limit)
 
 
+def get_conversation_state(client_id, chat_id: str) -> dict:
+    """
+    Detecta se já existe conversa anterior com este chat_id.
+    Retorna dict com informações para injeção de contexto.
+
+    Returns:
+        {
+            "is_returning": bool,        # True se já houve troca de mensagens
+            "message_count": int,         # Total de mensagens no histórico
+            "last_assistant_msg": str,    # Última mensagem da IA (resumo)
+            "last_user_msg": str,         # Última mensagem do usuário
+        }
+    """
+    state = {
+        "is_returning": False,
+        "message_count": 0,
+        "last_assistant_msg": "",
+        "last_user_msg": "",
+    }
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Conta total de mensagens
+                cur.execute(
+                    "SELECT COUNT(*) FROM chat_messages WHERE client_id = %s AND chat_id = %s",
+                    (client_id, chat_id),
+                )
+                row = cur.fetchone()
+                count = row[0] if row else 0
+                state["message_count"] = count
+                state["is_returning"] = count > 0
+
+                if count > 0:
+                    # Busca últimas mensagens (user + assistant) para contexto
+                    cur.execute(
+                        """
+                        SELECT role, content FROM chat_messages
+                        WHERE client_id = %s AND chat_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT 6
+                        """,
+                        (client_id, chat_id),
+                    )
+                    recent = cur.fetchall()
+                    for role, content in recent:
+                        if role == "assistant" and not state["last_assistant_msg"]:
+                            state["last_assistant_msg"] = (content or "")[:300]
+                        elif role == "user" and not state["last_user_msg"]:
+                            state["last_user_msg"] = (content or "")[:300]
+    except Exception as e:
+        logger.error(f"❌ Erro ao detectar estado da conversa: {e}")
+
+    return state
+
+
 def get_inbox_conversations(client_id):
     """
     Retorna lista de conversas ativas (Baseada na tabela active_conversations).
