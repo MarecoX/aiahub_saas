@@ -530,7 +530,7 @@ def render_tools_tab(user_data):
         if tool_name == "form_context" and is_active:
             st.markdown("#### Webhook de Formulario")
             st.info("Copie a URL abaixo e configure no seu formulario externo (Typeform, landing page, etc.):")
-            api_base = os.getenv("API_BASE_URL", "https://SEU-DOMINIO.com")
+            api_base = os.getenv("API_BASE_URL", "https://api.aiahub.com.br")
             form_webhook_url = f"{api_base}/api/v1/forms/{user_data.get('token')}/submit"
             st.code(form_webhook_url, language="text")
             st.caption(
