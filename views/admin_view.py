@@ -160,7 +160,7 @@ def render_admin_view():
                         sql,
                         (
                             name,
-                            None,  # Token opcional (NULL)
+                            uuid.uuid4().hex,  # Token gerado automaticamente
                             prompt,
                             store_id,
                             tools_config,
