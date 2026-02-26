@@ -76,6 +76,30 @@ async def run_rag():
         except Exception as e:
             logger.warning(f"⚠️ Erro ao carregar lead_context: {e}")
 
+    # --- INJEÇÃO DE ESTADO DA CONVERSA (Continuidade) ---
+    try:
+        from saas_db import get_conversation_state
+
+        _conv_state = get_conversation_state(client_config["id"], chat_id)
+        if _conv_state["is_returning"]:
+            _ctx_parts = [
+                "\n\n🔄 **CONTEXTO DA CONVERSA (CONTINUIDADE)**",
+                "Este cliente JÁ TEM um atendimento em andamento. NÃO reinicie o fluxo do zero.",
+                "NÃO envie a saudação inicial, NÃO envie o menu de opções novamente, NÃO envie o áudio de boas-vindas.",
+                "Retome a conversa de onde parou, com naturalidade.",
+                f"Total de mensagens anteriores: {_conv_state['message_count']}",
+            ]
+            if _conv_state["last_user_msg"]:
+                _ctx_parts.append(f"Última mensagem do cliente: \"{_conv_state['last_user_msg'][:200]}\"")
+            if _conv_state["last_assistant_msg"]:
+                _ctx_parts.append(f"Sua última resposta: \"{_conv_state['last_assistant_msg'][:200]}\"")
+            _ctx_parts.append("👉 Continue o atendimento a partir deste ponto. Se o cliente enviar apenas 'oi' ou 'olá', pergunte em que pode ajudar sem refazer todo o menu.")
+            system_prompt += "\n".join(_ctx_parts)
+            logger.info(f"🔄 Contexto de continuidade injetado para {chat_id} ({_conv_state['message_count']} msgs)")
+    except Exception as e:
+        logger.warning(f"⚠️ Erro ao injetar estado da conversa: {e}")
+    # -------------------------------------------------------
+
     # 3. Recuperar Mensagens do Redis (Buffer)
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 

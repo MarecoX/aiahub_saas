@@ -2,8 +2,11 @@
 forms.py - Webhook para receber dados de formularios externos.
 
 Endpoint publico (sem API key) que recebe qualquer JSON de formularios
-(landing pages, Typeform, Google Forms, etc.) e armazena o contexto
-no Redis vinculado ao chat_id (telefone) do lead.
+(landing pages, Typeform, Respondi, Google Forms, etc.) e armazena o
+contexto no Redis vinculado ao chat_id (telefone) do lead.
+
+Suporta payloads flat (chave-valor) e payloads nested do Respondi/Typeform
+com estrutura {form, respondent: {answers, raw_answers, respondent_utms}}.
 
 O rag_worker.py le esse contexto e injeta no system_prompt antes
 de chamar a IA, para que ela saiba o que a pessoa ja preencheu.
@@ -25,6 +28,32 @@ router = APIRouter(tags=["Forms"])
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
+# ── helpers de telefone ──────────────────────────────────────────────
+
+PHONE_KEYS = [
+    "phone", "telefone", "whatsapp", "celular", "mobile",
+    "tel", "fone", "numero", "number", "phone_number",
+]
+
+
+def _coerce_phone_value(val) -> str | None:
+    """Converte int/float/str para string de telefone, se possivel."""
+    if isinstance(val, (int, float)):
+        val = str(int(val))
+    if isinstance(val, str) and len(val.strip()) >= 8:
+        return val.strip()
+    return None
+
+
+def _normalize_phone(phone: str) -> str:
+    """Remove caracteres nao-numericos e garante formato limpo."""
+    digits = re.sub(r"\D", "", phone)
+    if digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) <= 11:
+        digits = f"55{digits}"
+    return digits
+
 
 def _extract_phone(data: dict) -> str | None:
     """
@@ -32,46 +61,165 @@ def _extract_phone(data: dict) -> str | None:
 
     Procura em campos comuns (phone, telefone, whatsapp, celular, mobile)
     e normaliza para formato internacional (apenas digitos).
+    Aceita valores string, int e float.
     """
-    phone_keys = [
-        "phone", "telefone", "whatsapp", "celular", "mobile",
-        "tel", "fone", "numero", "number", "phone_number",
-    ]
-
     # Busca direta nas keys do payload
-    for key in phone_keys:
+    for key in PHONE_KEYS:
         val = data.get(key)
-        if val and isinstance(val, str) and len(val.strip()) >= 8:
-            return _normalize_phone(val.strip())
+        coerced = _coerce_phone_value(val)
+        if coerced:
+            return _normalize_phone(coerced)
 
     # Busca case-insensitive
     for k, v in data.items():
-        if any(pk in k.lower() for pk in phone_keys):
-            if v and isinstance(v, str) and len(v.strip()) >= 8:
-                return _normalize_phone(v.strip())
+        if any(pk in k.lower() for pk in PHONE_KEYS):
+            coerced = _coerce_phone_value(v)
+            if coerced:
+                return _normalize_phone(coerced)
 
     # Busca dentro de "respostas" / "answers" / "fields"
     for container_key in ("respostas", "answers", "fields", "data", "form_data"):
         container = data.get(container_key, {})
         if isinstance(container, dict):
             for k, v in container.items():
-                if any(pk in k.lower() for pk in phone_keys):
-                    if v and isinstance(v, str) and len(v.strip()) >= 8:
-                        return _normalize_phone(v.strip())
+                if any(pk in k.lower() for pk in PHONE_KEYS):
+                    coerced = _coerce_phone_value(v)
+                    if coerced:
+                        return _normalize_phone(coerced)
 
     return None
 
 
-def _normalize_phone(phone: str) -> str:
-    """Remove caracteres nao-numericos e garante formato limpo."""
-    digits = re.sub(r"\D", "", phone)
-    # Se comeca com 0, remove (formato local BR)
-    if digits.startswith("0"):
-        digits = digits[1:]
-    # Se nao tem codigo de pais, assume Brasil (55)
-    if len(digits) <= 11:
-        digits = f"55{digits}"
-    return digits
+# ── parsing de payload Respondi / Typeform ───────────────────────────
+
+def _unwrap_payload(data) -> dict | None:
+    """
+    Desembrulha payloads encapsulados em array ou formato n8n.
+
+    Aceita:
+      - [{...}]                         → {...}
+      - {headers, body: {...}, ...}     → body
+      - {...}                           → direto
+    """
+    if isinstance(data, list):
+        if len(data) == 1 and isinstance(data[0], dict):
+            data = data[0]
+        else:
+            return None
+
+    if not isinstance(data, dict):
+        return None
+
+    # n8n wrapper: tem "body" + ("webhookUrl" ou "headers")
+    if "body" in data and ("webhookUrl" in data or "headers" in data):
+        inner = data["body"]
+        if isinstance(inner, dict):
+            return inner
+
+    return data
+
+
+def _is_respondi_payload(data: dict) -> bool:
+    """Detecta se o payload e do formato Respondi/Typeform."""
+    return (
+        isinstance(data.get("respondent"), dict)
+        and isinstance(data.get("form"), dict)
+    )
+
+
+def _normalize_respondi_payload(data: dict) -> dict:
+    """
+    Converte payload Respondi/Typeform para formato normalizado.
+
+    Input:
+        {
+            "form": {"form_name": "...", "form_id": "ag9uytVv"},
+            "respondent": {
+                "answers": {"Qual seu nome?": "Joao", ...},
+                "raw_answers": [{"question": {...}, "answer": ...}, ...],
+                "respondent_utms": {"utm_source": "ig", ...}
+            }
+        }
+
+    Output:
+        {
+            "nome": "Joao",
+            "telefone": "5511999999999",
+            "email": "joao@email.com",
+            "source": "Nome do Formulario",
+            "respostas": {"Qual seu nome?": "Joao", ...},
+            "utms": {"utm_source": "ig", ...}
+        }
+    """
+    form_info = data.get("form", {})
+    respondent = data.get("respondent", {})
+
+    answers = respondent.get("answers", {})
+    raw_answers = respondent.get("raw_answers", [])
+    utms = respondent.get("respondent_utms", {})
+
+    normalized: dict = {}
+
+    # Form name como source
+    form_name = form_info.get("form_name", "")
+    if form_name:
+        normalized["source"] = form_name
+
+    # Extrair dados tipados de raw_answers (phone, name, email)
+    for item in raw_answers:
+        q = item.get("question", {})
+        q_type = q.get("question_type", "")
+        answer = item.get("answer")
+
+        if q_type == "name" and answer:
+            normalized["nome"] = str(answer)
+        elif q_type == "email" and answer:
+            normalized["email"] = str(answer)
+        elif q_type == "phone" and answer:
+            if isinstance(answer, dict):
+                country = str(answer.get("country", "55"))
+                phone_num = str(answer.get("phone", ""))
+                normalized["telefone"] = f"{country}{phone_num}"
+            else:
+                normalized["telefone"] = str(answer)
+
+    # Fallback: procurar telefone nos answers por keyword
+    if "telefone" not in normalized and isinstance(answers, dict):
+        for q_text, a_text in answers.items():
+            if any(pk in q_text.lower() for pk in PHONE_KEYS):
+                coerced = _coerce_phone_value(a_text)
+                if coerced:
+                    normalized["telefone"] = coerced
+                    break
+
+    # Fallback: procurar nome nos answers por keyword
+    if "nome" not in normalized and isinstance(answers, dict):
+        for q_text, a_text in answers.items():
+            if any(nk in q_text.lower() for nk in ("nome", "name")):
+                if isinstance(a_text, str) and a_text.strip():
+                    normalized["nome"] = a_text.strip()
+                    break
+
+    # Respostas (dict pergunta→resposta)
+    if answers:
+        normalized["respostas"] = answers
+
+    # UTMs — limpar valores vazios
+    clean_utms = {k: v for k, v in utms.items() if v} if utms else {}
+    if clean_utms:
+        normalized["utms"] = clean_utms
+
+    return normalized
+
+
+@router.get("/{client_id}/submit")
+async def submit_form_get(client_id: str):
+    """Responde a GET requests (health-check de provedores de formulario)."""
+    return {
+        "status": "ok",
+        "method": "POST",
+        "detail": "Use POST to submit form data.",
+    }
 
 
 @router.post("/{client_id}/submit")
@@ -114,12 +262,19 @@ async def submit_form(client_id: str, request: Request):
 
     # Parse body
     try:
-        body = await request.json()
+        raw_body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON invalido")
 
-    if not isinstance(body, dict) or not body:
+    # Desembrulha payload (array, n8n wrapper)
+    body = _unwrap_payload(raw_body)
+    if not body:
         raise HTTPException(status_code=400, detail="Payload deve ser um objeto JSON nao-vazio")
+
+    # Detecta e normaliza payload Respondi/Typeform
+    if _is_respondi_payload(body):
+        body = _normalize_respondi_payload(body)
+        logger.info("📋 Payload Respondi/Typeform detectado e normalizado")
 
     # Extrai telefone
     phone = _extract_phone(body)

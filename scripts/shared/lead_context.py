@@ -127,6 +127,10 @@ def format_context_for_prompt(context_data: dict) -> str:
     if nome:
         parts.append(f"**Nome:** {nome}")
 
+    email = context_data.get("email")
+    if email:
+        parts.append(f"**Email:** {email}")
+
     source = context_data.get("source")
     if source:
         parts.append(f"**Origem:** {source}")
@@ -145,11 +149,19 @@ def format_context_for_prompt(context_data: dict) -> str:
                 if line:
                     parts.append(f"  - {line}")
 
-    # Campos extras (qualquer chave que não seja nome/source/respostas)
+    # UTMs (origem do tráfego)
+    utms = context_data.get("utms", {})
+    if isinstance(utms, dict) and utms:
+        parts.append("\n**Origem do Tráfego (UTMs):**")
+        for campo, valor in utms.items():
+            parts.append(f"  - {campo}: {valor}")
+
+    # Campos extras (qualquer chave que não seja campo já tratado)
+    _known_keys = ("nome", "source", "respostas", "email", "utms", "telefone")
     extras = {
         k: v
         for k, v in context_data.items()
-        if k not in ("nome", "source", "respostas") and v
+        if k not in _known_keys and v
     }
     if extras:
         parts.append("\n**Dados Adicionais:**")
