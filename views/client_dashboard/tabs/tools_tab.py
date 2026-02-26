@@ -529,30 +529,24 @@ def render_tools_tab(user_data):
         # Form Context: mostra webhook URL quando ativo
         if tool_name == "form_context" and is_active:
             st.markdown("#### Webhook de Formulario")
-            _client_token = user_data.get("token") or ""
-            if _client_token:
-                st.info("Copie a URL abaixo e configure no seu formulario externo (Typeform, landing page, etc.):")
-                api_base = os.getenv("API_BASE_URL", "https://api.aiahub.com.br")
-                form_webhook_url = f"{api_base}/api/v1/forms/{_client_token}/submit"
-                st.code(form_webhook_url, language="text")
-            else:
-                st.warning("Token do cliente nao encontrado. Entre em contato com o suporte.")
-                form_webhook_url = None
-            if _client_token:
-                st.caption(
-                    "**Metodo:** POST | **Content-Type:** application/json | "
-                    "**Requisito:** Incluir campo de telefone (phone, telefone, whatsapp, celular)"
+            st.info("Copie a URL abaixo e configure no seu formulario externo (Typeform, landing page, etc.):")
+            api_base = os.getenv("API_BASE_URL", "https://api.aiahub.com.br")
+            form_webhook_url = f"{api_base}/api/v1/forms/{user_data['id']}/submit"
+            st.code(form_webhook_url, language="text")
+            st.caption(
+                "**Metodo:** POST | **Content-Type:** application/json | "
+                "**Requisito:** Incluir campo de telefone (phone, telefone, whatsapp, celular)"
+            )
+            with st.expander("Exemplo de payload", expanded=False):
+                st.code(
+                    '{\n'
+                    '  "nome": "Joao Silva",\n'
+                    '  "telefone": "11999999999",\n'
+                    '  "interesse": "Plano Premium",\n'
+                    '  "orcamento": "R$ 5.000"\n'
+                    '}',
+                    language="json",
                 )
-                with st.expander("Exemplo de payload", expanded=False):
-                    st.code(
-                        '{\n'
-                        '  "nome": "Joao Silva",\n'
-                        '  "telefone": "11999999999",\n'
-                        '  "interesse": "Plano Premium",\n'
-                        '  "orcamento": "R$ 5.000"\n'
-                        '}',
-                        language="json",
-                    )
 
         st.divider()
 

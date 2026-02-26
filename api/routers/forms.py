@@ -8,7 +8,7 @@ no Redis vinculado ao chat_id (telefone) do lead.
 O rag_worker.py le esse contexto e injeta no system_prompt antes
 de chamar a IA, para que ela saiba o que a pessoa ja preencheu.
 
-URL: POST /api/v1/forms/{client_token}/submit
+URL: POST /api/v1/forms/{client_id}/submit
 """
 
 import logging
@@ -17,7 +17,7 @@ import re
 
 from fastapi import APIRouter, HTTPException, Request
 
-from saas_db import get_client_config
+from saas_db import get_client_config_by_id
 
 logger = logging.getLogger("API_Forms")
 
@@ -74,8 +74,8 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
-@router.post("/{client_token}/submit")
-async def submit_form(client_token: str, request: Request):
+@router.post("/{client_id}/submit")
+async def submit_form(client_id: str, request: Request):
     """
     Recebe dados de um formulario externo e salva o contexto no Redis.
 
@@ -96,8 +96,8 @@ async def submit_form(client_token: str, request: Request):
     Returns:
         {"status": "ok", "chat_id": "5511999999999"}
     """
-    # Valida cliente
-    client_config = get_client_config(client_token)
+    # Valida cliente pelo ID (UUID)
+    client_config = get_client_config_by_id(client_id)
     if not client_config:
         raise HTTPException(status_code=404, detail="Cliente nao encontrado")
 
@@ -136,7 +136,6 @@ async def submit_form(client_token: str, request: Request):
     try:
         from scripts.shared.lead_context import save_lead_context
 
-        client_id = str(client_config["id"])
         success = save_lead_context(
             redis_url=REDIS_URL,
             client_id=client_id,
