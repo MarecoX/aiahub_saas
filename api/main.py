@@ -5,6 +5,7 @@ import os
 import logging
 
 from api.routers import clients
+from api.routers import forms
 from api.routers import meta
 from api.routers import providers
 
@@ -49,6 +50,7 @@ async def privacy_policy():
 app.include_router(clients.router, prefix="/api/v1/clients", tags=["Clients"])
 app.include_router(providers.router, prefix="/api/v1/clients/{token}/providers", tags=["Providers"])
 app.include_router(meta.router, prefix="/api/v1/meta", tags=["Meta Webhooks"])
+app.include_router(forms.router, prefix="/api/v1/forms", tags=["Forms"])
 
 
 @app.get("/")
