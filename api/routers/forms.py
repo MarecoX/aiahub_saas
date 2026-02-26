@@ -11,22 +11,143 @@ com estrutura {form, respondent: {answers, raw_answers, respondent_utms}}.
 O rag_worker.py le esse contexto e injeta no system_prompt antes
 de chamar a IA, para que ela saiba o que a pessoa ja preencheu.
 
+Opcionalmente, envia uma saudacao proativa ao lead via WhatsApp
+(quando send_greeting esta ativo no form_context).
+
 URL: POST /api/v1/forms/{client_id}/submit
 """
 
+import asyncio
 import logging
 import os
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from google import genai
 
-from saas_db import get_client_config_by_id
+from saas_db import get_client_config_by_id, get_default_provider, get_provider_config
 
 logger = logging.getLogger("API_Forms")
 
 router = APIRouter(tags=["Forms"])
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+_gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        logger.warning("⚠️ Gemini client nao inicializado (greeting desabilitado)")
+
+
+# ── envio proativo de saudacao ───────────────────────────────────────
+
+async def _send_form_greeting(
+    client_id: str,
+    client_config: dict,
+    phone: str,
+    context_data: dict,
+    form_cfg: dict,
+):
+    """
+    Gera uma saudacao com IA e envia ao lead via WhatsApp (background task).
+    """
+    try:
+        # 1. Gerar texto da saudacao via Gemini
+        if not _gemini_client:
+            logger.error("❌ Gemini client indisponivel — saudacao nao enviada")
+            return
+
+        from scripts.shared.lead_context import format_context_for_prompt
+
+        context_text = format_context_for_prompt(context_data)
+        form_instructions = form_cfg.get("instructions", "")
+        system_prompt = client_config.get("system_prompt", "")
+
+        prompt = (
+            f"Voce e um assistente virtual profissional.\n"
+            f"Perfil do assistente:\n{system_prompt[:1500]}\n\n"
+            f"O lead acabou de preencher um formulario e seus dados sao:\n{context_text}\n\n"
+        )
+        if form_instructions:
+            prompt += f"Instrucoes especificas do cliente:\n{form_instructions}\n\n"
+        prompt += (
+            "Sua tarefa: Gere uma UNICA mensagem de saudacao para enviar ao lead via WhatsApp.\n"
+            "Regras:\n"
+            "1. Seja breve, cordial e direto.\n"
+            "2. Use o nome do lead se disponivel.\n"
+            "3. Faca referencia ao interesse/dados do formulario.\n"
+            "4. NAO use placeholders como [Nome]. NAO use markdown.\n"
+            "5. Gere APENAS o texto da mensagem, sem explicacoes.\n"
+        )
+
+        response = _gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={"temperature": 0.3},
+        )
+        greeting_text = response.text.strip()
+
+        if not greeting_text or len(greeting_text) < 5:
+            logger.warning("⚠️ Saudacao gerada vazia ou muito curta — abortando envio")
+            return
+
+        # 2. Descobrir provider e enviar
+        provider_type, provider_cfg = get_default_provider(str(client_id))
+
+        # Fallback: campo legado whatsapp_provider
+        if not provider_type:
+            provider_type = client_config.get("whatsapp_provider") or "none"
+            provider_cfg = get_provider_config(str(client_id), provider_type) or {}
+
+        if provider_type in (None, "", "none"):
+            logger.warning(f"⚠️ Nenhum provider configurado para {client_config['name']} — saudacao nao enviada")
+            return
+
+        logger.info(f"📤 Enviando saudacao via {provider_type} para {phone}")
+
+        if provider_type == "uazapi":
+            from scripts.uazapi.uazapi_saas import send_whatsapp_message
+
+            base_url = provider_cfg.get("url") or client_config.get("api_url") or ""
+            api_key = provider_cfg.get("token") or provider_cfg.get("api_key") or client_config.get("token") or ""
+            await send_whatsapp_message(phone, greeting_text, api_key=api_key, base_url=base_url)
+
+        elif provider_type == "meta":
+            from scripts.meta.meta_client import MetaClient
+
+            token = provider_cfg.get("token", "")
+            phone_id = provider_cfg.get("phone_id", "")
+            if token and phone_id:
+                meta = MetaClient(token=token, phone_id=phone_id)
+                await meta.send_message_text(to=phone, text=greeting_text)
+            else:
+                logger.error("❌ Meta provider sem token ou phone_id — saudacao nao enviada")
+                return
+
+        elif provider_type == "lancepilot":
+            from scripts.lancepilot.client import LancePilotClient
+
+            lp_token = provider_cfg.get("token") or client_config.get("lancepilot_token") or ""
+            workspace_id = provider_cfg.get("workspace_id") or client_config.get("lancepilot_workspace_id") or ""
+            if lp_token and workspace_id:
+                lp = LancePilotClient(token=lp_token)
+                await asyncio.to_thread(lp.send_text_message_via_number, workspace_id, phone, greeting_text)
+            else:
+                logger.error("❌ LancePilot provider sem token ou workspace — saudacao nao enviada")
+                return
+
+        else:
+            logger.warning(f"⚠️ Provider '{provider_type}' nao suportado para saudacao")
+            return
+
+        logger.info(f"✅ Saudacao enviada para {phone} (client={client_config['name']}, provider={provider_type})")
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar saudacao para {phone}: {e}")
+
 
 # ── helpers de telefone ──────────────────────────────────────────────
 
@@ -223,7 +344,7 @@ async def submit_form_get(client_id: str):
 
 
 @router.post("/{client_id}/submit")
-async def submit_form(client_id: str, request: Request):
+async def submit_form(client_id: str, request: Request, background_tasks: BackgroundTasks):
     """
     Recebe dados de um formulario externo e salva o contexto no Redis.
 
@@ -305,6 +426,18 @@ async def submit_form(client_id: str, request: Request):
             f"📋 Form context salvo: client={client_config['name']}, "
             f"phone={phone}, fields={len(body)}"
         )
+
+        # --- Envio de saudacao proativa (background) ---
+        if form_cfg.get("send_greeting"):
+            background_tasks.add_task(
+                _send_form_greeting,
+                client_id=client_id,
+                client_config=client_config,
+                phone=phone,
+                context_data=body,
+                form_cfg=form_cfg,
+            )
+            logger.info(f"📤 Saudacao agendada para {phone}")
 
         return {"status": "ok", "chat_id": phone, "fields_received": len(body)}
 
