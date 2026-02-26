@@ -197,6 +197,49 @@ async def process_incoming_webhook(data: Dict[str, Any]):
                     _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
                     system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
                     t_cfg = client_config.get("tools_config", {})
+
+                    # --- INJEÇÃO DE CONTEXTO DE FORMULÁRIO (lead_context) ---
+                    _form_cfg = (t_cfg or {}).get("form_context", {})
+                    if isinstance(_form_cfg, bool):
+                        _form_cfg = {"active": _form_cfg}
+                    if _form_cfg.get("active"):
+                        try:
+                            from scripts.shared.lead_context import get_lead_context, format_context_for_prompt
+
+                            _redis_url = client_config.get("redis_url") or os.getenv("REDIS_URL") or "redis://redis:6379/0"
+                            _lead_ctx = get_lead_context(_redis_url, str(client_config["id"]), from_phone)
+                            if _lead_ctx:
+                                system_prompt += "\n\n" + format_context_for_prompt(_lead_ctx)
+                                _form_instr = _form_cfg.get("instructions", "")
+                                if _form_instr:
+                                    system_prompt += f"\n📝 **INSTRUÇÕES DO CLIENTE PARA FORMULÁRIOS**:\n{_form_instr}\n"
+                                logger.info(f"📋 Lead context injetado para {from_phone}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Erro ao carregar lead_context: {e}")
+
+                    # --- INJEÇÃO DE ESTADO DA CONVERSA (Continuidade) ---
+                    try:
+                        from scripts.shared.saas_db import get_conversation_state
+
+                        _conv_state = get_conversation_state(client_config["id"], from_phone)
+                        if _conv_state["is_returning"]:
+                            _ctx_parts = [
+                                "\n\n🔄 **CONTEXTO DA CONVERSA (CONTINUIDADE)**",
+                                "Este cliente JÁ TEM um atendimento em andamento. NÃO reinicie o fluxo do zero.",
+                                "NÃO envie a saudação inicial, NÃO envie o menu de opções novamente, NÃO envie o áudio de boas-vindas.",
+                                "Retome a conversa de onde parou, com naturalidade.",
+                                f"Total de mensagens anteriores: {_conv_state['message_count']}",
+                            ]
+                            if _conv_state["last_user_msg"]:
+                                _ctx_parts.append(f"Última mensagem do cliente: \"{_conv_state['last_user_msg'][:200]}\"")
+                            if _conv_state["last_assistant_msg"]:
+                                _ctx_parts.append(f"Sua última resposta: \"{_conv_state['last_assistant_msg'][:200]}\"")
+                            _ctx_parts.append("👉 Continue o atendimento a partir deste ponto. Se o cliente enviar apenas 'oi' ou 'olá', pergunte em que pode ajudar sem refazer todo o menu.")
+                            system_prompt += "\n".join(_ctx_parts)
+                            logger.info(f"🔄 Contexto de continuidade injetado para {from_phone} ({_conv_state['message_count']} msgs)")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Erro ao injetar estado da conversa: {e}")
+
                     if t_cfg:
                         stop_cfg = t_cfg.get("desativar_ia", {})
                         if isinstance(stop_cfg, bool):

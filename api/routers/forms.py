@@ -145,6 +145,15 @@ async def _send_form_greeting(
 
         logger.info(f"✅ Saudacao enviada para {phone} (client={client_config['name']}, provider={provider_type})")
 
+        # Persiste saudacao no historico para que a IA principal saiba o que ja foi dito
+        try:
+            from scripts.shared.saas_db import add_message
+
+            add_message(client_config["id"], phone, "assistant", greeting_text)
+            logger.info(f"💾 Saudacao salva no historico para {phone}")
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao salvar saudacao no historico: {e}")
+
     except Exception as e:
         logger.error(f"❌ Erro ao enviar saudacao para {phone}: {e}")
 
