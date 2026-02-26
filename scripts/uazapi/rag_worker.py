@@ -86,8 +86,28 @@ async def run_rag():
     _dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
     system_prompt = f"Data/Hora Atual: {_dias[_now_br.weekday()]}, {_now_br.strftime('%d/%m/%Y %H:%M')} (Fuso horário: UTC-3 Brasília)\n\n{client_config['system_prompt']}"
 
-    # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
+    # --- INJEÇÃO DE CONTEXTO DE FORMULÁRIO (lead_context) ---
     t_cfg = client_config.get("tools_config", {})
+    _form_cfg = (t_cfg or {}).get("form_context", {})
+    if isinstance(_form_cfg, bool):
+        _form_cfg = {"active": _form_cfg}
+    if _form_cfg.get("active"):
+        try:
+            from lead_context import get_lead_context, format_context_for_prompt
+
+            _sender = chat_id.split("@")[0] if "@" in chat_id else chat_id
+            _lead_ctx = get_lead_context(REDIS_URL, str(client_config["id"]), _sender)
+            if _lead_ctx:
+                system_prompt += "\n\n" + format_context_for_prompt(_lead_ctx)
+                # Injeta instrucoes customizadas do cliente sobre como tratar form
+                _form_instr = _form_cfg.get("instructions", "")
+                if _form_instr:
+                    system_prompt += f"\n📝 **INSTRUÇÕES DO CLIENTE PARA FORMULÁRIOS**:\n{_form_instr}\n"
+                logger.info(f"📋 Lead context injetado para {_sender}")
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao carregar lead_context: {e}")
+
+    # --- INJEÇÃO DE INSTRUÇÕES DINÂMICAS (UI) ---
 
     # -------------------------------------------------------------
     # 🔐 SECURITY CHECKS (Whitelist / Blocklist)

@@ -476,6 +476,7 @@ REGISTRY_TOOL_ORDER = [
     "desbloqueio_de_confianca_hubsoft",
     "cal_dot_com",
     "sgp_tools",
+    "form_context",
     # whatsapp_reactions is rendered in the WhatsApp Advanced section
 ]
 
@@ -524,6 +525,29 @@ def render_tools_tab(user_data):
         meta = TOOL_REGISTRY[tool_name]
         is_active, tool_save_dict = _render_tool_section(tool_name, meta, t_config)
         save_configs[tool_name] = tool_save_dict
+
+        # Form Context: mostra webhook URL quando ativo
+        if tool_name == "form_context" and is_active:
+            st.markdown("#### Webhook de Formulario")
+            st.info("Copie a URL abaixo e configure no seu formulario externo (Typeform, landing page, etc.):")
+            api_base = os.getenv("API_BASE_URL", "https://SEU-DOMINIO.com")
+            form_webhook_url = f"{api_base}/api/v1/forms/{user_data.get('token')}/submit"
+            st.code(form_webhook_url, language="text")
+            st.caption(
+                "**Metodo:** POST | **Content-Type:** application/json | "
+                "**Requisito:** Incluir campo de telefone (phone, telefone, whatsapp, celular)"
+            )
+            with st.expander("Exemplo de payload", expanded=False):
+                st.code(
+                    '{\n'
+                    '  "nome": "Joao Silva",\n'
+                    '  "telefone": "11999999999",\n'
+                    '  "interesse": "Plano Premium",\n'
+                    '  "orcamento": "R$ 5.000"\n'
+                    '}',
+                    language="json",
+                )
+
         st.divider()
 
     # ── LancePilot (special section) ──

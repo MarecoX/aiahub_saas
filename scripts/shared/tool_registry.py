@@ -359,6 +359,29 @@ TOOL_REGISTRY = {
             "Registre resultado como 'ganho' quando o cliente confirmar a compra."
         ),
     },
+    # ── Contexto de Formulario (Plataforma) ──
+    "form_context": {
+        "label": "\U0001f4cb Contexto de Formulario Externo",
+        "category": "generic",
+        "applicable_to": ["*"],
+        "has_instructions": True,
+        "config_fields": {},
+        "credential_source": None,
+        "wrapper_type": "custom",
+        "provider_badge": "\U0001f7e2 Todos",
+        "ui_help": (
+            "Recebe dados de formularios externos (landing pages, typeform, etc.) "
+            "e injeta o contexto automaticamente na conversa da IA."
+        ),
+        "ui_caption": (
+            "A IA recebera as respostas do formulario e dara continuidade ao "
+            "atendimento sem perguntar o que a pessoa ja respondeu."
+        ),
+        "instructions_placeholder": (
+            "Ex: Quando receber contexto de formulario, cumprimente o lead pelo nome "
+            "e faca referencia ao interesse que ele indicou."
+        ),
+    },
     # ── SGP Tools (ISP) ──
     "sgp_tools": {
         "label": "\U0001f527 SGP (Vendas + Suporte)",
