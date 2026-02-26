@@ -365,13 +365,24 @@ TOOL_REGISTRY = {
         "category": "generic",
         "applicable_to": ["*"],
         "has_instructions": True,
-        "config_fields": {},
+        "config_fields": {
+            "send_greeting": {
+                "type": "toggle",
+                "label": "Enviar saudacao proativa ao lead",
+                "help": (
+                    "Quando ativado, a IA gera e envia uma mensagem de saudacao "
+                    "automaticamente via WhatsApp assim que o formulario for recebido."
+                ),
+                "default": False,
+            },
+        },
         "credential_source": None,
         "wrapper_type": "custom",
         "provider_badge": "\U0001f7e2 Todos",
         "ui_help": (
             "Recebe dados de formularios externos (landing pages, typeform, etc.) "
-            "e injeta o contexto automaticamente na conversa da IA."
+            "e injeta o contexto automaticamente na conversa da IA. "
+            "Opcionalmente, envia uma saudacao proativa ao lead via WhatsApp."
         ),
         "ui_caption": (
             "A IA recebera as respostas do formulario e dara continuidade ao "
