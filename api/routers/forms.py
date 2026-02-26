@@ -26,12 +26,22 @@ router = APIRouter(tags=["Forms"])
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
+def _coerce_phone_value(val) -> str | None:
+    """Converte int/float/str para string de telefone, se possivel."""
+    if isinstance(val, (int, float)):
+        val = str(int(val))
+    if isinstance(val, str) and len(val.strip()) >= 8:
+        return val.strip()
+    return None
+
+
 def _extract_phone(data: dict) -> str | None:
     """
     Tenta extrair o telefone do payload de forma inteligente.
 
     Procura em campos comuns (phone, telefone, whatsapp, celular, mobile)
     e normaliza para formato internacional (apenas digitos).
+    Aceita valores string, int e float.
     """
     phone_keys = [
         "phone", "telefone", "whatsapp", "celular", "mobile",
@@ -41,14 +51,16 @@ def _extract_phone(data: dict) -> str | None:
     # Busca direta nas keys do payload
     for key in phone_keys:
         val = data.get(key)
-        if val and isinstance(val, str) and len(val.strip()) >= 8:
-            return _normalize_phone(val.strip())
+        coerced = _coerce_phone_value(val)
+        if coerced:
+            return _normalize_phone(coerced)
 
     # Busca case-insensitive
     for k, v in data.items():
         if any(pk in k.lower() for pk in phone_keys):
-            if v and isinstance(v, str) and len(v.strip()) >= 8:
-                return _normalize_phone(v.strip())
+            coerced = _coerce_phone_value(v)
+            if coerced:
+                return _normalize_phone(coerced)
 
     # Busca dentro de "respostas" / "answers" / "fields"
     for container_key in ("respostas", "answers", "fields", "data", "form_data"):
@@ -56,8 +68,9 @@ def _extract_phone(data: dict) -> str | None:
         if isinstance(container, dict):
             for k, v in container.items():
                 if any(pk in k.lower() for pk in phone_keys):
-                    if v and isinstance(v, str) and len(v.strip()) >= 8:
-                        return _normalize_phone(v.strip())
+                    coerced = _coerce_phone_value(v)
+                    if coerced:
+                        return _normalize_phone(coerced)
 
     return None
 
@@ -72,6 +85,16 @@ def _normalize_phone(phone: str) -> str:
     if len(digits) <= 11:
         digits = f"55{digits}"
     return digits
+
+
+@router.get("/{client_id}/submit")
+async def submit_form_get(client_id: str):
+    """Responde a GET requests (health-check de provedores de formulario)."""
+    return {
+        "status": "ok",
+        "method": "POST",
+        "detail": "Use POST to submit form data.",
+    }
 
 
 @router.post("/{client_id}/submit")
