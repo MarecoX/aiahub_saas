@@ -107,6 +107,12 @@ TOOL_REGISTRY = {
                 "max": 1440,
                 "help": "Tempo que a IA ficara pausada apos transferir para humano.",
             },
+            "permanent_on_human_reply": {
+                "type": "toggle",
+                "label": "Parar IA permanentemente ao responder",
+                "default": False,
+                "help": "Se ativado, quando o atendente humano enviar qualquer mensagem, a IA para PERMANENTEMENTE naquele chat (sem timeout). Para reativar, use #ativar.",
+            },
         },
         "credential_source": None,
         "wrapper_type": "inject_runtime",
@@ -315,6 +321,66 @@ TOOL_REGISTRY = {
         "ui_section": "whatsapp_advanced",
         "ui_help": "Permite que a IA reaja as mensagens do cliente com emojis.",
         "instructions_placeholder": "Ex: Reaja com olhos em toda mensagem nova. Use positivo quando cliente confirmar algo.",
+    },
+    # ── Attlas CRM (Gestao Completa) ──
+    "attlas_crm": {
+        "label": "\U0001f3e2 Attlas CRM (Gestao Completa)",
+        "category": "crm",
+        "applicable_to": ["*"],
+        "has_instructions": True,
+        "config_fields": {
+            "base_url": {
+                "type": "text",
+                "label": "URL do Tenant",
+                "placeholder": "https://empresa.attlascrm.com",
+                "help": "URL base do tenant no Attlas CRM (sem barra no final).",
+            },
+            "token": {
+                "type": "password",
+                "label": "Token Sanctum (Bearer)",
+                "help": "Token de API gerado via POST /api/v1/auth-token (valido por 7 dias).",
+            },
+        },
+        "credential_source": "config",
+        "wrapper_type": "custom",
+        "provider_badge": "\U0001f7e2 Todos",
+        "ui_help": (
+            "Integra a IA com o Attlas CRM. Permite gerenciar projetos, leads, "
+            "colunas, tags, comentarios, checklists, produtos, vinculos, "
+            "workflows e integracoes — tudo via conversa no WhatsApp."
+        ),
+        "ui_caption": (
+            "58 ferramentas: Projetos, Listas, Cards, Lead Scoring, Comentarios, "
+            "Tags, Participantes, Vinculos, Checklists, Produtos, Workflows e Integracoes."
+        ),
+        "instructions_placeholder": (
+            "Ex: Quando o cliente perguntar sobre um lead, consulte o Kanban. "
+            "Quando pedir para criar um card, pergunte nome e telefone primeiro. "
+            "Registre resultado como 'ganho' quando o cliente confirmar a compra."
+        ),
+    },
+    # ── Contexto de Formulario (Plataforma) ──
+    "form_context": {
+        "label": "\U0001f4cb Contexto de Formulario Externo",
+        "category": "generic",
+        "applicable_to": ["*"],
+        "has_instructions": True,
+        "config_fields": {},
+        "credential_source": None,
+        "wrapper_type": "custom",
+        "provider_badge": "\U0001f7e2 Todos",
+        "ui_help": (
+            "Recebe dados de formularios externos (landing pages, typeform, etc.) "
+            "e injeta o contexto automaticamente na conversa da IA."
+        ),
+        "ui_caption": (
+            "A IA recebera as respostas do formulario e dara continuidade ao "
+            "atendimento sem perguntar o que a pessoa ja respondeu."
+        ),
+        "instructions_placeholder": (
+            "Ex: Quando receber contexto de formulario, cumprimente o lead pelo nome "
+            "e faca referencia ao interesse que ele indicou."
+        ),
     },
     # ── SGP Tools (ISP) ──
     "sgp_tools": {

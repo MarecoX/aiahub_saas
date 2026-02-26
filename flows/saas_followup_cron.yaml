@@ -22,6 +22,9 @@ tasks:
       enabled: true
       include: ["**"]
     
+    beforeCommands:
+      - pip install cryptography > /dev/null 2>&1
+
     commands:
       - export PYTHONPATH=$PYTHONPATH:.
       - python Kestra_2.0/scripts/uazapi/followup_worker.py

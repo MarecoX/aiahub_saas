@@ -63,6 +63,9 @@ tasks:
       enabled: true
       include: [ "**" ]
 
+    beforeCommands:
+      - pip install cryptography > /dev/null 2>&1
+
     commands:
       - rm -f .env
       - export PYTHONPATH=$PYTHONPATH:.
