@@ -620,6 +620,32 @@ def is_within_business_hours(tools_config: dict) -> tuple:
         return False, bh.get("off_message", "")
 
 
+def is_within_followup_hours(followup_config: dict) -> bool:
+    """
+    Verifica se o momento atual está dentro da faixa de horário permitida para follow-up.
+    Se allowed_hours não estiver ativo, retorna True (sem restrição).
+
+    Args:
+        followup_config: Dict com a configuração do follow-up do cliente.
+
+    Returns:
+        True se pode disparar follow-up agora, False caso contrário.
+    """
+    allowed_hours = (followup_config or {}).get("allowed_hours", {})
+    if not allowed_hours.get("enabled"):
+        return True
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    current = now.strftime("%H:%M")
+    start = allowed_hours.get("start", "00:00")
+    end = allowed_hours.get("end", "23:59")
+
+    return start <= current <= end
+
+
 def get_all_clients_db():
     """
     Lista todos os clientes (para Admin/API).

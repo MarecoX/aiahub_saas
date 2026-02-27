@@ -11,6 +11,9 @@ if root_dir not in sys.path:
 
 from scripts.shared.saas_db import get_connection
 
+# Gera lista de horarios de 00:00 a 23:30 (intervalos de 30min)
+_TIME_OPTIONS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
+
 
 def render_followup_tab(user_data):
     st.header("⏰ Follow-up Automático")
@@ -37,6 +40,58 @@ def render_followup_tab(user_data):
 
     # Widgets
     active = st.toggle("Ativar Follow-up Automático", key=active_key)
+
+    # --- Controle de Faixa de Horário ---
+    if active:
+        st.divider()
+        st.subheader("Faixa de Horário Permitida")
+        st.caption(
+            "Defina em quais horários o follow-up pode disparar. "
+            "Fora dessa faixa, as mensagens ficam em espera até o próximo horário permitido."
+        )
+
+        allowed_hours = f_config.get("allowed_hours", {})
+
+        ah_enabled = st.toggle(
+            "Restringir horário de disparo",
+            value=allowed_hours.get("enabled", False),
+            help="Se ativado, follow-ups só serão enviados dentro da faixa de horário configurada.",
+            key=f"ah_enabled_{user_data['id']}",
+        )
+
+        if ah_enabled:
+            col_start, col_end = st.columns(2)
+            with col_start:
+                start_val = allowed_hours.get("start", "08:00")
+                start_idx = _TIME_OPTIONS.index(start_val) if start_val in _TIME_OPTIONS else 16
+                ah_start = st.selectbox(
+                    "Início",
+                    options=_TIME_OPTIONS,
+                    index=start_idx,
+                    key=f"ah_start_{user_data['id']}",
+                )
+            with col_end:
+                end_val = allowed_hours.get("end", "20:00")
+                end_idx = _TIME_OPTIONS.index(end_val) if end_val in _TIME_OPTIONS else 40
+                ah_end = st.selectbox(
+                    "Fim",
+                    options=_TIME_OPTIONS,
+                    index=end_idx,
+                    key=f"ah_end_{user_data['id']}",
+                )
+
+            if ah_start >= ah_end:
+                st.warning("O horário de início deve ser anterior ao de fim.")
+        else:
+            ah_start = allowed_hours.get("start", "08:00")
+            ah_end = allowed_hours.get("end", "20:00")
+    else:
+        ah_enabled = False
+        ah_start = "08:00"
+        ah_end = "20:00"
+
+    st.divider()
+
     current_stages = st.session_state[stages_key]
 
     st.subheader(f"Etapas de Retomada ({len(current_stages)})")
@@ -97,7 +152,15 @@ def render_followup_tab(user_data):
 
     st.divider()
     if st.button("💾 Salvar Configuração de Follow-up", type="primary"):
-        final_config = {"active": active, "stages": st.session_state[stages_key]}
+        final_config = {
+            "active": active,
+            "stages": st.session_state[stages_key],
+            "allowed_hours": {
+                "enabled": ah_enabled,
+                "start": ah_start,
+                "end": ah_end,
+            },
+        }
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
