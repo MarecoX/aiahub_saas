@@ -624,6 +624,7 @@ def is_within_followup_hours(followup_config: dict) -> bool:
     """
     Verifica se o momento atual está dentro da faixa de horário permitida para follow-up.
     Se allowed_hours não estiver ativo, retorna True (sem restrição).
+    Suporta dias da semana (campo 'days') e faixa de horário (start/end).
 
     Args:
         followup_config: Dict com a configuração do follow-up do cliente.
@@ -639,6 +640,16 @@ def is_within_followup_hours(followup_config: dict) -> bool:
     from zoneinfo import ZoneInfo
 
     now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    # Checa dia da semana
+    day_keys = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]
+    days = allowed_hours.get("days", {})
+    if days:
+        today_key = day_keys[now.weekday()]
+        if not days.get(today_key, True):
+            return False
+
+    # Checa faixa de horário
     current = now.strftime("%H:%M")
     start = allowed_hours.get("start", "00:00")
     end = allowed_hours.get("end", "23:59")
