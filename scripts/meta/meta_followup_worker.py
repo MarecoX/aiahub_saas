@@ -12,7 +12,7 @@ sys.path.append(
 )
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "meta")))
 
-from saas_db import get_connection, get_provider_config
+from saas_db import get_connection, get_provider_config, is_within_followup_hours
 from config import REDIS_URL
 from meta_client import MetaClient
 
@@ -100,6 +100,11 @@ async def check_and_run_followups():
                 # Check Active Flag via Python
                 is_active = config.get("active")
                 if str(is_active).lower() != "true":
+                    continue
+
+                # Check: Allowed Hours (Faixa de Horário)
+                if not is_within_followup_hours(config):
+                    logger.info(f"🕐 Skipping {chat_id}: Fora da faixa de horário permitida para follow-up.")
                     continue
 
                 # Check 1: Human Intervention (Redis)

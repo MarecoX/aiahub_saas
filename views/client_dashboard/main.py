@@ -12,6 +12,7 @@ from views.client_dashboard.tabs.followup_tab import render_followup_tab
 from views.client_dashboard.tabs.monitoring_tab import render_monitoring_tab
 from views.client_dashboard.tabs.business_hours_tab import render_business_hours_tab
 from views.client_dashboard.tabs.llm_config_tab import render_llm_config_tab
+from views.client_dashboard.tabs.attlas_tab import render_attlas_tab
 
 # Configure Logger
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,7 @@ def render_client_dashboard(user_data):
                 "💬 Testar Assistente",
                 "🤖 Modelo IA",
                 "🔗 Integrações",
+                "🏢 Attlas CRM",
                 "🕐 Horário de Atendimento IA",
                 "📷 WhatsApp (Legacy/QR)",
                 "⏰ Follow-up Autônomo",
@@ -133,6 +135,9 @@ def render_client_dashboard(user_data):
     elif selected_page == "🟢 WhatsApp Oficial":
         # Whatsapp Tab already has its own headers/sub-tabs
         render_whatsapp_tab(user_data)
+
+    elif selected_page == "🏢 Attlas CRM":
+        render_attlas_tab(user_data)
 
     elif selected_page == "🕐 Horário de Atendimento IA":
         render_business_hours_tab(user_data)

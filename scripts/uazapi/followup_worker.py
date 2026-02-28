@@ -9,7 +9,7 @@ from google import genai
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "shared"))
 )
-from saas_db import get_connection, get_provider_config, log_event
+from saas_db import get_connection, get_provider_config, log_event, is_within_followup_hours
 from uazapi_saas import send_whatsapp_message, send_whatsapp_audio
 from config import REDIS_URL
 
@@ -174,6 +174,11 @@ async def check_and_run_followups():
                 is_active = config.get("active")
                 active_values = [True, "true", "True", "1", 1]
                 if is_active not in active_values:
+                    continue
+
+                # Check: Allowed Hours (Faixa de Horário)
+                if not is_within_followup_hours(config):
+                    logger.info(f"🕐 Skipping {chat_id}: Fora da faixa de horário permitida para follow-up.")
                     continue
 
                 # Check 1: Human Intervention (Redis)

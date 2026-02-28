@@ -13,7 +13,7 @@ sys.path.append(shared_dir)
 sys.path.append(scripts_dir)  # For lancepilot.client import
 
 # Imports
-from saas_db import get_connection, get_provider_config  # noqa: E402
+from saas_db import get_connection, get_provider_config, is_within_followup_hours  # noqa: E402
 from config import REDIS_URL  # noqa: E402
 from lancepilot.client import LancePilotClient  # noqa: E402
 
@@ -116,6 +116,11 @@ async def check_and_run_followups():
                     logger.info(
                         f"⏭️ SKIP [{chat_id}]: Follow-up DESATIVADO (active={is_active})"
                     )
+                    continue
+
+                # 2.5. Check Allowed Hours (Faixa de Horário)
+                if not is_within_followup_hours(followup_config):
+                    logger.info(f"🕐 SKIP [{chat_id}]: Fora da faixa de horário permitida para follow-up.")
                     continue
 
                 # 3. Check Human Intervention
