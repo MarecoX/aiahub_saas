@@ -16,7 +16,7 @@ sys.path.append(shared_dir)
 
 from config import REDIS_URL
 from message_buffer import buffer_message  # noqa: E402
-from saas_db import get_client_token_by_phone, get_client_config  # noqa: E402
+from saas_db import get_client_token_by_phone, get_client_config, add_message  # noqa: E402
 
 # Config logging
 logging.basicConfig(level=logging.INFO)
@@ -230,6 +230,18 @@ async def run_ingest():
             await r.aclose()
         except Exception as e:
             logger.error(f"Erro Redis Pause: {e}")
+
+        # --- PERSISTÊNCIA: Salva mensagem do humano no chat_messages ---
+        if outgoing_text and outgoing_text.strip():
+            try:
+                if webhook_token:
+                    _cfg = get_client_config(webhook_token)
+                    if _cfg:
+                        add_message(_cfg["id"], chat_id, "human", outgoing_text)
+                        logger.info(f"💬 Mensagem do humano salva no histórico: {outgoing_text[:50]}...")
+            except Exception as e:
+                logger.error(f"⚠️ Erro ao salvar mensagem humana no histórico: {e}")
+        # ---------------------------------------------------------------
 
         Kestra.outputs(
             {

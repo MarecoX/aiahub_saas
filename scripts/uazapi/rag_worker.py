@@ -124,6 +124,12 @@ async def run_rag():
                 _ctx_parts.append(f"Última mensagem do cliente: \"{_conv_state['last_user_msg'][:200]}\"")
             if _conv_state["last_assistant_msg"]:
                 _ctx_parts.append(f"Sua última resposta: \"{_conv_state['last_assistant_msg'][:200]}\"")
+            # Injeta mensagens do atendente humano (se houver)
+            if _conv_state.get("human_messages"):
+                _ctx_parts.append("\n👤 **MENSAGENS DO ATENDENTE HUMANO** (enviadas enquanto você estava pausada):")
+                for i, hmsg in enumerate(_conv_state["human_messages"], 1):
+                    _ctx_parts.append(f"  {i}. Atendente: \"{hmsg}\"")
+                _ctx_parts.append("⚠️ IMPORTANTE: Leve em conta o que o atendente humano já conversou com o cliente. Não repita informações já fornecidas pelo atendente.")
             _ctx_parts.append("👉 Continue o atendimento a partir deste ponto. Se o cliente enviar apenas 'oi' ou 'olá', pergunte em que pode ajudar sem refazer todo o menu.")
             system_prompt += "\n".join(_ctx_parts)
             logger.info(f"🔄 Contexto de continuidade injetado para {chat_id} ({_conv_state['message_count']} msgs)")

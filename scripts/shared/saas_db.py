@@ -775,6 +775,7 @@ def get_conversation_state(client_id, chat_id: str) -> dict:
             "message_count": int,         # Total de mensagens no histórico
             "last_assistant_msg": str,    # Última mensagem da IA (resumo)
             "last_user_msg": str,         # Última mensagem do usuário
+            "human_messages": list,       # Mensagens do atendente humano (após última resposta da IA)
         }
     """
     state = {
@@ -782,6 +783,7 @@ def get_conversation_state(client_id, chat_id: str) -> dict:
         "message_count": 0,
         "last_assistant_msg": "",
         "last_user_msg": "",
+        "human_messages": [],
     }
     try:
         with get_connection() as conn:
@@ -797,13 +799,13 @@ def get_conversation_state(client_id, chat_id: str) -> dict:
                 state["is_returning"] = count > 0
 
                 if count > 0:
-                    # Busca últimas mensagens (user + assistant) para contexto
+                    # Busca últimas mensagens (user + assistant + human) para contexto
                     cur.execute(
                         """
                         SELECT role, content FROM chat_messages
                         WHERE client_id = %s AND chat_id = %s
                         ORDER BY created_at DESC
-                        LIMIT 6
+                        LIMIT 20
                         """,
                         (client_id, chat_id),
                     )
@@ -813,6 +815,27 @@ def get_conversation_state(client_id, chat_id: str) -> dict:
                             state["last_assistant_msg"] = (content or "")[:300]
                         elif role == "user" and not state["last_user_msg"]:
                             state["last_user_msg"] = (content or "")[:300]
+
+                    # Busca mensagens do humano após a última resposta da IA
+                    cur.execute(
+                        """
+                        SELECT content FROM chat_messages
+                        WHERE client_id = %s AND chat_id = %s AND role = 'human'
+                          AND created_at > COALESCE(
+                            (SELECT MAX(created_at) FROM chat_messages
+                             WHERE client_id = %s AND chat_id = %s AND role = 'assistant'),
+                            '1970-01-01'
+                          )
+                        ORDER BY created_at ASC
+                        LIMIT 10
+                        """,
+                        (client_id, chat_id, client_id, chat_id),
+                    )
+                    human_rows = cur.fetchall()
+                    for row in human_rows:
+                        content = row["content"] if isinstance(row, dict) else row[0]
+                        if content and content.strip():
+                            state["human_messages"].append((content or "")[:300])
     except Exception as e:
         logger.error(f"❌ Erro ao detectar estado da conversa: {e}")
 

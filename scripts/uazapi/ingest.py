@@ -16,7 +16,7 @@ sys.path.insert(
 
 from message_handler import handle_message
 from config import REDIS_URL, BUFFER_KEY_SUFIX, BUFFER_TTL
-from saas_db import get_connection, get_client_config, get_provider_config, log_event
+from saas_db import get_connection, get_client_config, get_provider_config, log_event, add_message
 
 # Configuração de Logger
 logging.basicConfig(level=logging.INFO)
@@ -154,6 +154,19 @@ async def run_ingest(webhook_data):
             except Exception as e:
                 logger.error(f"\u26a0\ufe0f Erro ao trackear resposta humana: {e}")
             # ------------------------------------------------
+
+            # --- PERSISTÊNCIA: Salva mensagem do humano no chat_messages ---
+            if outgoing_text and outgoing_text.strip():
+                try:
+                    _token = webhook_data.get("token") or webhook_data.get("instanceId")
+                    if _token:
+                        _cfg = get_client_config(_token)
+                        if _cfg:
+                            add_message(_cfg["id"], chat_id, "human", outgoing_text)
+                            logger.info(f"💬 Mensagem do humano salva no histórico: {outgoing_text[:50]}...")
+                except Exception as e:
+                    logger.error(f"⚠️ Erro ao salvar mensagem humana no histórico: {e}")
+            # ---------------------------------------------------------------
 
             return
 
