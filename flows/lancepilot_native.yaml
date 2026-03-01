@@ -19,6 +19,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: ingest_lp
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
 
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
@@ -53,6 +54,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: rag_worker_lp
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
 
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
@@ -90,6 +92,7 @@ tasks:
   # -------------------------------------------------------------------------
   - id: send_lp
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
 
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker

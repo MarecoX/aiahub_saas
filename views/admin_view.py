@@ -365,7 +365,7 @@ def render_admin_view():
                     st.error(f"Erro ao salvar: {e}")
 
     with tab5:
-        # --- FILTROS GLOBAIS ---
+        # --- FILTROS ---
         df_clients = list_clients()
         client_names = ["Todos"] + (
             df_clients["name"].tolist() if not df_clients.empty else []
@@ -374,7 +374,7 @@ def render_admin_view():
         fcol1, fcol2, fcol3 = st.columns([2, 1, 1])
         with fcol1:
             selected_client = st.selectbox(
-                "🏢 Filtrar por Cliente", client_names, key="consumo_filter"
+                "Filtrar por Cliente", client_names, key="consumo_filter"
             )
         with fcol2:
             start_date = st.date_input(
@@ -382,588 +382,247 @@ def render_admin_view():
             )
         with fcol3:
             end_date = st.date_input(
-                "Até", value=datetime.now(), key="consumo_ate"
+                "Ate", value=datetime.now(), key="consumo_ate"
             )
 
-        # end_date + 1 dia para incluir o dia completo (date sem hora = meia-noite)
         end_date_exclusive = end_date + timedelta(days=1)
 
+        # Helpers reutilizaveis para filtro de cliente
+        _cli_where = "AND c.name = %s" if selected_client != "Todos" else ""
+        _cli_params = (selected_client,) if selected_client != "Todos" else ()
+
         # ============================================================
-        # SEÇÃO 1: ATENDIMENTO EM TEMPO REAL (24h)
+        #  1) AGORA: O QUE ESTA ACONTECENDO NAS ULTIMAS 24H
         # ============================================================
-        st.header("📞 Atendimento em Tempo Real (24h)")
+        st.markdown("---")
+        st.header("O que esta acontecendo agora (ultimas 24h)")
+        st.caption(
+            "Conversas ativas neste momento. "
+            "Quem a IA ja respondeu, quem o humano respondeu, e quem esta esperando."
+        )
 
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    client_filter_sql = (
-                        "AND c.name = %s" if selected_client != "Todos" else ""
-                    )
-                    params_attend = (
-                        (selected_client,) if selected_client != "Todos" else ()
-                    )
-
                     cur.execute(
                         f"""
                         SELECT
                             c.name as cliente,
-                            COUNT(CASE WHEN ac.last_role = 'user' AND ac.last_message_at < NOW() - INTERVAL '5 minutes' THEN 1 END) as aguardando_resposta,
-                            COUNT(CASE WHEN ac.last_role = 'human' THEN 1 END) as atendidos_humano,
-                            COUNT(CASE WHEN ac.last_role = 'ai' THEN 1 END) as atendidos_ia,
-                            COUNT(*) as total_conversas
+                            COUNT(*) as total,
+                            COUNT(CASE WHEN ac.last_role = 'ai' THEN 1 END) as ia_respondeu,
+                            COUNT(CASE WHEN ac.last_role = 'human' THEN 1 END) as humano_respondeu,
+                            COUNT(CASE WHEN ac.last_role = 'user'
+                                       AND ac.last_message_at < NOW() - INTERVAL '5 minutes'
+                                  THEN 1 END) as esperando_resposta
                         FROM active_conversations ac
                         JOIN clients c ON ac.client_id = c.id
                         WHERE ac.status = 'active'
-                        AND ac.last_message_at > NOW() - INTERVAL '24 hours'
-                        {client_filter_sql}
+                          AND ac.last_message_at > NOW() - INTERVAL '24 hours'
+                        {_cli_where}
                         GROUP BY c.name
-                        ORDER BY aguardando_resposta DESC
+                        ORDER BY esperando_resposta DESC
                         """,
-                        params_attend,
+                        _cli_params,
                     )
                     rows = cur.fetchall()
 
                     if rows:
-                        df_attend = _sanitize_df(pd.DataFrame(rows))
+                        df_rt = _sanitize_df(pd.DataFrame(rows))
+                        t_total = int(df_rt["total"].sum())
+                        t_ia = int(df_rt["ia_respondeu"].sum())
+                        t_hum = int(df_rt["humano_respondeu"].sum())
+                        t_esp = int(df_rt["esperando_resposta"].sum())
 
-                        total_aguardando = int(df_attend["aguardando_resposta"].sum())
-                        total_humano = int(df_attend["atendidos_humano"].sum())
-                        total_ia = int(df_attend["atendidos_ia"].sum())
-                        total_all = int(df_attend["total_conversas"].sum())
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Conversas Ativas", t_total)
+                        c2.metric("IA Respondeu", t_ia)
+                        c3.metric("Humano Respondeu", t_hum)
+                        c4.metric("Esperando Resposta", t_esp)
 
-                        mc1, mc2, mc3, mc4 = st.columns(4)
-                        mc1.metric("🔴 Aguardando Humano", total_aguardando)
-                        mc2.metric("👤 Atendidos por Humano", total_humano)
-                        mc3.metric("🤖 Atendidos por IA", total_ia)
-                        mc4.metric("💬 Total Conversas (24h)", total_all)
+                        if t_total > 0:
+                            p1, p2, p3 = st.columns(3)
+                            p1.metric("% pela IA", f"{t_ia / t_total * 100:.0f}%")
+                            p2.metric("% pelo Humano", f"{t_hum / t_total * 100:.0f}%")
+                            p3.metric("% Sem Resposta", f"{t_esp / t_total * 100:.0f}%")
 
-                        # Percentuais
-                        if total_all > 0:
-                            pct_ia = (total_ia / total_all) * 100
-                            pct_humano = (total_humano / total_all) * 100
-                            pct_aguardando = (total_aguardando / total_all) * 100
-                            pc1, pc2, pc3 = st.columns(3)
-                            pc1.metric("🤖 % IA", f"{pct_ia:.1f}%")
-                            pc2.metric("👤 % Humano", f"{pct_humano:.1f}%")
-                            pc3.metric("🔴 % Aguardando", f"{pct_aguardando:.1f}%")
-
-                        st.dataframe(df_attend, width="stretch")
+                        st.dataframe(
+                            df_rt,
+                            column_config={
+                                "cliente": "Cliente",
+                                "total": st.column_config.NumberColumn("Total Conversas", format="%d"),
+                                "ia_respondeu": st.column_config.NumberColumn("IA Respondeu", format="%d"),
+                                "humano_respondeu": st.column_config.NumberColumn("Humano Respondeu", format="%d"),
+                                "esperando_resposta": st.column_config.NumberColumn("Esperando Resposta", format="%d"),
+                            },
+                            hide_index=True,
+                            width="stretch",
+                        )
                     else:
-                        st.info("Nenhuma conversa ativa nas últimas 24h.")
+                        st.info("Nenhuma conversa ativa nas ultimas 24h.")
         except Exception as e:
-            st.warning(f"⚠️ Erro ao buscar indicadores: {e}")
-            st.caption(
-                "Verifique se a tabela active_conversations existe e tem a coluna last_role."
-            )
-
-        st.divider()
+            st.warning(f"Erro ao buscar conversas ativas: {e}")
 
         # ============================================================
-        # SEÇÃO 2: GRÁFICO DE CUSTO DIÁRIO
+        #  2) FUNIL DE VENDAS: TODOS OS LEADS FORAM ATENDIDOS?
         # ============================================================
-        st.header("📈 Custo Diário (USD)")
+        st.markdown("---")
+        st.header("Todos os leads foram atendidos? (periodo selecionado)")
+        st.caption(
+            "De todos os leads que chegaram, quantos a IA resolveu sozinha, "
+            "em quantos o humano precisou entrar, e quantos ficaram sem resolucao (possivel perda de venda)."
+        )
 
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    client_filter_sql2 = (
-                        "AND u.client_id = c.id AND c.name = %s"
-                        if selected_client != "Todos"
-                        else ""
-                    )
-                    extra_join = (
-                        "JOIN clients c ON u.client_id = c.id"
-                        if selected_client != "Todos"
-                        else ""
-                    )
-                    params_chart = (start_date, end_date_exclusive)
-                    if selected_client != "Todos":
-                        params_chart = (start_date, end_date_exclusive, selected_client)
-
                     cur.execute(
                         f"""
-                        SELECT DATE(u.created_at) as dia,
-                               ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
-                               ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
-                        FROM usage_tracking u
-                        {extra_join}
-                        WHERE u.created_at >= %s AND u.created_at < %s
-                        {client_filter_sql2}
-                        GROUP BY dia
-                        ORDER BY dia
+                        SELECT
+                            c.name as cliente,
+                            COALESCE(SUM(m.total_conversations), 0)::int as total_leads,
+                            COALESCE(SUM(m.resolved_by_ai), 0)::int as ia_resolveu,
+                            COALESCE(SUM(m.resolved_by_human), 0)::int as humano_resolveu,
+                            COALESCE(SUM(m.human_takeovers), 0)::int as humano_entrou,
+                            COALESCE(SUM(m.followups_sent), 0)::int as followups,
+                            COALESCE(SUM(m.followups_converted), 0)::int as followups_ok,
+                            COALESCE(SUM(m.total_messages_in), 0)::int as msgs_recebidas,
+                            COALESCE(SUM(m.total_messages_out), 0)::int as msgs_enviadas,
+                            ROUND(COALESCE(AVG(m.avg_response_time_ms), 0))::int as tempo_resposta_ms
+                        FROM metrics_daily m
+                        JOIN clients c ON m.client_id = c.id
+                        WHERE m.date >= %s AND m.date < %s
+                        {_cli_where}
+                        GROUP BY c.name
+                        ORDER BY total_leads DESC
                         """,
-                        params_chart,
+                        (start_date, end_date_exclusive) + _cli_params,
                     )
-                    chart_rows = cur.fetchall()
-
-                    if chart_rows:
-                        df_chart = _sanitize_df(pd.DataFrame(chart_rows))
-                        df_chart["dia"] = pd.to_datetime(df_chart["dia"])
-                        df_chart = df_chart.set_index("dia")
-                        st.line_chart(df_chart[["custo_usd", "custo_brl"]])
-                    else:
-                        st.info("Sem dados de custo no período.")
-        except Exception as e:
-            st.warning(f"⚠️ Erro ao gerar gráfico diário: {e}")
-
-        st.divider()
-
-        # ============================================================
-        # SEÇÃO 3: CONSUMO POR PROVIDER (OpenAI, Gemini, Whisper)
-        # ============================================================
-        st.header("📊 Consumo por Provider")
-        st.caption("Monitoramento de custos de OpenAI, Gemini e Whisper")
-
-        try:
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    if selected_client == "Todos":
-                        cur.execute(
-                            """
-                            SELECT
-                                c.name as cliente,
-                                u.provider,
-                                COUNT(DISTINCT u.chat_id) as atendimentos,
-                                SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
-                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
-                                SUM(u.whisper_seconds) as segundos_audio,
-                                SUM(u.images_count) as imagens,
-                                ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
-                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
-                            FROM usage_tracking u
-                            JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at >= %s AND u.created_at < %s
-                            GROUP BY c.name, u.provider
-                            ORDER BY custo_usd DESC
-                        """,
-                            (start_date, end_date_exclusive),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT
-                                c.name as cliente,
-                                u.provider,
-                                COUNT(DISTINCT u.chat_id) as atendimentos,
-                                SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
-                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
-                                SUM(u.whisper_seconds) as segundos_audio,
-                                SUM(u.images_count) as imagens,
-                                ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
-                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
-                            FROM usage_tracking u
-                            JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at >= %s AND u.created_at < %s
-                            AND c.name = %s
-                            GROUP BY c.name, u.provider
-                            ORDER BY custo_usd DESC
-                        """,
-                            (start_date, end_date_exclusive, selected_client),
-                        )
                     rows = cur.fetchall()
+
                     if rows:
-                        df_usage = _sanitize_df(pd.DataFrame(rows))
-                        st.dataframe(df_usage, width="stretch")
+                        df = _sanitize_df(pd.DataFrame(rows))
 
-                        # Gráfico de barras por cliente
-                        if len(df_usage) > 1:
-                            st.bar_chart(df_usage.set_index("cliente")["custo_brl"])
-                    else:
-                        st.info("Nenhum dado de consumo por provider no período.")
-        except Exception as e:
-            st.warning(f"⚠️ Erro na tabela por provider: {e}")
+                        total_leads = int(df["total_leads"].sum())
+                        total_ia = int(df["ia_resolveu"].sum())
+                        total_hum_resolveu = int(df["humano_resolveu"].sum())
+                        total_hum_entrou = int(df["humano_entrou"].sum())
+                        total_resolvidos = total_ia + total_hum_resolveu
+                        total_sem_resolucao = max(0, total_leads - total_resolvidos)
+                        total_fup = int(df["followups"].sum())
+                        total_fup_ok = int(df["followups_ok"].sum())
 
-        st.divider()
+                        # --- RESUMO VISUAL ---
+                        st.subheader("Resumo Geral")
+                        k1, k2, k3, k4 = st.columns(4)
+                        k1.metric("Total de Leads", total_leads,
+                                  help="Quantidade de conversas unicas que chegaram no periodo")
+                        k2.metric("IA Resolveu Sozinha", total_ia,
+                                  help="Lead resolvido 100% pela IA, sem nenhum humano intervir")
+                        k3.metric("Humano Precisou Entrar", total_hum_resolveu + total_hum_entrou,
+                                  help="Um atendente humano precisou assumir a conversa")
+                        k4.metric("Sem Resolucao (PERDA)", total_sem_resolucao,
+                                  help="O lead falou com a IA mas ninguem resolveu — possivel perda de venda!")
 
-        # ============================================================
-        # SEÇÃO 4: DETALHAMENTO DIÁRIO POR CLIENTE
-        # ============================================================
-        st.header("📋 Detalhamento Diário por Cliente")
+                        # --- TAXAS ---
+                        if total_leads > 0:
+                            pct_ia = total_ia / total_leads * 100
+                            pct_hum = (total_hum_resolveu + total_hum_entrou) / total_leads * 100
+                            pct_perda = total_sem_resolucao / total_leads * 100
 
-        try:
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    if selected_client == "Todos":
-                        cur.execute(
-                            """
-                            SELECT
-                                c.name as cliente,
-                                DATE(u.created_at) as dia,
-                                COUNT(DISTINCT u.chat_id) as atendimentos,
-                                SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
-                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
-                                SUM(u.whisper_seconds) as segundos_audio,
-                                SUM(u.images_count) as imagens,
-                                ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
-                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
-                            FROM usage_tracking u
-                            JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at >= %s AND u.created_at < %s
-                            GROUP BY c.name, dia
-                            ORDER BY dia DESC, custo_usd DESC
-                        """,
-                            (start_date, end_date_exclusive),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT
-                                c.name as cliente,
-                                DATE(u.created_at) as dia,
-                                COUNT(DISTINCT u.chat_id) as atendimentos,
-                                SUM(u.openai_input_tokens + u.openai_output_tokens) as tokens_openai,
-                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as tokens_gemini,
-                                SUM(u.whisper_seconds) as segundos_audio,
-                                SUM(u.images_count) as imagens,
-                                ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
-                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
-                            FROM usage_tracking u
-                            JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at >= %s AND u.created_at < %s
-                            AND c.name = %s
-                            GROUP BY c.name, dia
-                            ORDER BY dia DESC, custo_usd DESC
-                        """,
-                            (start_date, end_date_exclusive, selected_client),
-                        )
-                    detail_rows = cur.fetchall()
+                            t1, t2, t3 = st.columns(3)
+                            t1.metric("Taxa IA (sem humano)", f"{pct_ia:.1f}%",
+                                      help="% dos leads que a IA resolveu sozinha")
+                            t2.metric("Taxa Humano Necessario", f"{pct_hum:.1f}%",
+                                      help="% dos leads onde o humano teve que intervir")
+                            t3.metric("Taxa de Perda", f"{pct_perda:.1f}%",
+                                      help="% dos leads sem resolucao — possivel erro de vendas!")
 
-                    if detail_rows:
-                        df_detail = _sanitize_df(pd.DataFrame(detail_rows))
+                            if pct_perda > 20:
+                                st.error(
+                                    f"ATENCAO: {pct_perda:.0f}% dos leads ficaram sem resolucao! "
+                                    f"Isso significa que {total_sem_resolucao} pessoas podem ter desistido."
+                                )
+                            elif pct_perda > 10:
+                                st.warning(
+                                    f"Atencao: {pct_perda:.0f}% dos leads sem resolucao ({total_sem_resolucao} leads)."
+                                )
+
+                        # --- FOLLOW-UPS ---
+                        if total_fup > 0:
+                            fu1, fu2, fu3 = st.columns(3)
+                            fu1.metric("Follow-ups Enviados", total_fup)
+                            fu2.metric("Follow-ups que Deram Certo", total_fup_ok)
+                            fu3.metric("Taxa de Conversao",
+                                       f"{total_fup_ok / total_fup * 100:.1f}%")
+
+                        # --- VOLUME ---
+                        total_msgs_in = int(df["msgs_recebidas"].sum())
+                        total_msgs_out = int(df["msgs_enviadas"].sum())
+                        m1, m2 = st.columns(2)
+                        m1.metric("Mensagens Recebidas (clientes)", f"{total_msgs_in:,}")
+                        m2.metric("Mensagens Enviadas (IA + humano)", f"{total_msgs_out:,}")
+
+                        # --- TABELA POR CLIENTE ---
+                        st.subheader("Detalhamento por Cliente")
+                        df["sem_resolucao"] = (df["total_leads"] - df["ia_resolveu"] - df["humano_resolveu"]).clip(lower=0)
+                        df["taxa_ia"] = (df["ia_resolveu"] / df["total_leads"].replace(0, 1) * 100).round(1)
+                        df["taxa_perda"] = (df["sem_resolucao"] / df["total_leads"].replace(0, 1) * 100).round(1)
+
                         st.dataframe(
-                            df_detail,
+                            df[["cliente", "total_leads", "ia_resolveu", "humano_resolveu",
+                                "humano_entrou", "sem_resolucao", "taxa_ia", "taxa_perda",
+                                "followups", "followups_ok"]],
                             column_config={
                                 "cliente": "Cliente",
-                                "dia": st.column_config.DateColumn(
-                                    "Data", format="DD/MM/YYYY"
-                                ),
-                                "atendimentos": st.column_config.NumberColumn(
-                                    "Atendimentos", format="%d"
-                                ),
-                                "tokens_openai": st.column_config.NumberColumn(
-                                    "Tokens OpenAI", format="%d"
-                                ),
-                                "tokens_gemini": st.column_config.NumberColumn(
-                                    "Tokens Gemini", format="%d"
-                                ),
-                                "segundos_audio": st.column_config.NumberColumn(
-                                    "Áudio (s)", format="%d"
-                                ),
-                                "imagens": st.column_config.NumberColumn(
-                                    "Imagens", format="%d"
-                                ),
-                                "custo_usd": st.column_config.NumberColumn(
-                                    "Custo (USD)", format="$%.4f"
-                                ),
-                                "custo_brl": st.column_config.NumberColumn(
-                                    "Custo (BRL)", format="R$%.2f"
-                                ),
+                                "total_leads": st.column_config.NumberColumn("Total Leads", format="%d"),
+                                "ia_resolveu": st.column_config.NumberColumn("IA Resolveu", format="%d"),
+                                "humano_resolveu": st.column_config.NumberColumn("Humano Resolveu", format="%d"),
+                                "humano_entrou": st.column_config.NumberColumn("Humano Entrou", format="%d"),
+                                "sem_resolucao": st.column_config.NumberColumn("Sem Resolucao", format="%d"),
+                                "taxa_ia": st.column_config.NumberColumn("% IA", format="%.1f%%"),
+                                "taxa_perda": st.column_config.NumberColumn("% Perda", format="%.1f%%"),
+                                "followups": st.column_config.NumberColumn("Follow-ups", format="%d"),
+                                "followups_ok": st.column_config.NumberColumn("Convertidos", format="%d"),
                             },
                             hide_index=True,
                             width="stretch",
                         )
                     else:
-                        st.info("Nenhum detalhe diário no período.")
+                        st.info("Nenhum dado no periodo. Verifique se o metrics_worker esta rodando.")
         except Exception as e:
-            st.warning(f"⚠️ Erro no detalhamento diário: {e}")
-
-        st.divider()
-
-        # ============================================================
-        # SEÇÃO 5: TOTAIS CONSOLIDADOS
-        # ============================================================
-        st.header("💰 Resumo Consolidado")
-
-        try:
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    if selected_client == "Todos":
-                        cur.execute(
-                            """
-                            SELECT
-                                COUNT(DISTINCT u.chat_id) as total_atendimentos,
-                                ROUND(SUM(u.cost_usd)::numeric, 4) as total_usd,
-                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as total_brl,
-                                SUM(u.openai_input_tokens + u.openai_output_tokens) as total_tokens_openai,
-                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as total_tokens_gemini,
-                                SUM(u.whisper_seconds) as total_segundos_audio,
-                                SUM(u.images_count) as total_imagens
-                            FROM usage_tracking u
-                            WHERE u.created_at >= %s AND u.created_at < %s
-                        """,
-                            (start_date, end_date_exclusive),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT
-                                COUNT(DISTINCT u.chat_id) as total_atendimentos,
-                                ROUND(SUM(u.cost_usd)::numeric, 4) as total_usd,
-                                ROUND(SUM(u.cost_usd * 12)::numeric, 2) as total_brl,
-                                SUM(u.openai_input_tokens + u.openai_output_tokens) as total_tokens_openai,
-                                SUM(u.gemini_input_tokens + u.gemini_output_tokens) as total_tokens_gemini,
-                                SUM(u.whisper_seconds) as total_segundos_audio,
-                                SUM(u.images_count) as total_imagens
-                            FROM usage_tracking u
-                            JOIN clients c ON u.client_id = c.id
-                            WHERE u.created_at >= %s AND u.created_at < %s
-                            AND c.name = %s
-                        """,
-                            (start_date, end_date_exclusive, selected_client),
-                        )
-                    totals = cur.fetchone()
-
-                    if totals and totals.get("total_usd"):
-                        t1, t2, t3 = st.columns(3)
-                        t1.metric(
-                            "💰 Custo Total",
-                            f"R$ {float(totals['total_brl'] or 0):.2f}",
-                            f"USD {float(totals['total_usd'] or 0):.4f}",
-                        )
-                        t2.metric(
-                            "📞 Total Atendimentos",
-                            int(totals["total_atendimentos"] or 0),
-                        )
-                        t3.metric(
-                            "🖼️ Imagens Processadas",
-                            int(totals["total_imagens"] or 0),
-                        )
-
-                        t4, t5 = st.columns(2)
-                        t4.metric(
-                            "🔤 Tokens OpenAI",
-                            f"{int(totals['total_tokens_openai'] or 0):,}",
-                        )
-                        t5.metric(
-                            "🔤 Tokens Gemini",
-                            f"{int(totals['total_tokens_gemini'] or 0):,}",
-                        )
-                    else:
-                        st.info("Nenhum dado consolidado no período.")
-        except Exception as e:
-            st.warning(f"⚠️ Erro ao calcular totais: {e}")
-
-        st.divider()
-
-        # ============================================================
-        # SEÇÃO 6: MÉTRICAS DE TEMPO DE RESPOSTA DA IA
-        # ============================================================
-        st.header("⏱️ Tempo de Resposta da IA")
-
-        try:
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    if selected_client == "Todos":
-                        # Resumo geral
-                        cur.execute(
-                            """
-                            SELECT
-                                c.name as cliente,
-                                ROUND(AVG(m.avg_response_time_ms)) as media_resposta_ms,
-                                ROUND(AVG(m.avg_resolution_time_ms)) as media_resolucao_ms,
-                                SUM(m.total_conversations) as total_conversas,
-                                SUM(m.total_messages_in) as msgs_recebidas,
-                                SUM(m.total_messages_out) as msgs_enviadas,
-                                SUM(m.resolved_by_ai) as resolvidas_ia,
-                                SUM(m.resolved_by_human) as resolvidas_humano,
-                                SUM(m.human_takeovers) as transferencias_humano,
-                                SUM(m.followups_sent) as followups_enviados,
-                                SUM(m.followups_converted) as followups_convertidos
-                            FROM metrics_daily m
-                            JOIN clients c ON m.client_id = c.id
-                            WHERE m.date >= %s AND m.date < %s
-                            GROUP BY c.name
-                            ORDER BY media_resposta_ms ASC
-                        """,
-                            (start_date, end_date_exclusive),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT
-                                c.name as cliente,
-                                ROUND(AVG(m.avg_response_time_ms)) as media_resposta_ms,
-                                ROUND(AVG(m.avg_resolution_time_ms)) as media_resolucao_ms,
-                                SUM(m.total_conversations) as total_conversas,
-                                SUM(m.total_messages_in) as msgs_recebidas,
-                                SUM(m.total_messages_out) as msgs_enviadas,
-                                SUM(m.resolved_by_ai) as resolvidas_ia,
-                                SUM(m.resolved_by_human) as resolvidas_humano,
-                                SUM(m.human_takeovers) as transferencias_humano,
-                                SUM(m.followups_sent) as followups_enviados,
-                                SUM(m.followups_converted) as followups_convertidos
-                            FROM metrics_daily m
-                            JOIN clients c ON m.client_id = c.id
-                            WHERE m.date >= %s AND m.date < %s
-                            AND c.name = %s
-                            GROUP BY c.name
-                            ORDER BY media_resposta_ms ASC
-                        """,
-                            (start_date, end_date_exclusive, selected_client),
-                        )
-                    metric_rows = cur.fetchall()
-
-                    if metric_rows:
-                        df_metrics = _sanitize_df(pd.DataFrame(metric_rows))
-
-                        # Cards globais
-                        avg_resp = df_metrics["media_resposta_ms"].mean()
-                        avg_resol = df_metrics["media_resolucao_ms"].mean()
-                        total_conv_m = int(df_metrics["total_conversas"].sum())
-                        total_res_ia = int(df_metrics["resolvidas_ia"].sum())
-                        total_res_hum = int(df_metrics["resolvidas_humano"].sum())
-                        total_takeovers = int(df_metrics["transferencias_humano"].sum())
-                        total_followups = int(df_metrics["followups_enviados"].sum())
-                        total_fw_conv = int(df_metrics["followups_convertidos"].sum())
-
-                        # Formatar tempo legível
-                        def fmt_ms(ms):
-                            if pd.isna(ms) or ms == 0:
-                                return "N/A"
-                            if ms < 1000:
-                                return f"{int(ms)}ms"
-                            return f"{ms / 1000:.1f}s"
-
-                        r1, r2, r3 = st.columns(3)
-                        r1.metric("⚡ Tempo Médio de Resposta", fmt_ms(avg_resp))
-                        r2.metric("🏁 Tempo Médio de Resolução", fmt_ms(avg_resol))
-                        r3.metric("📨 Total Conversas (período)", total_conv_m)
-
-                        r4, r5, r6 = st.columns(3)
-                        r4.metric("🤖 Resolvidas por IA", total_res_ia)
-                        r5.metric("👤 Resolvidas por Humano", total_res_hum)
-                        r6.metric("🔄 Transferências p/ Humano", total_takeovers)
-
-                        # Taxa de resolução IA
-                        total_resolved = total_res_ia + total_res_hum
-                        if total_resolved > 0:
-                            taxa_ia = (total_res_ia / total_resolved) * 100
-                            r7, r8, r9 = st.columns(3)
-                            r7.metric("🎯 Taxa Resolução IA", f"{taxa_ia:.1f}%")
-                            if total_followups > 0:
-                                taxa_fw = (total_fw_conv / total_followups) * 100
-                                r8.metric("📤 Follow-ups Enviados", total_followups)
-                                r9.metric("✅ Follow-ups Convertidos", f"{total_fw_conv} ({taxa_fw:.1f}%)")
-                            else:
-                                r8.metric("📤 Follow-ups Enviados", 0)
-                                r9.metric("✅ Follow-ups Convertidos", 0)
-
-                        # Tabela por cliente
-                        st.dataframe(
-                            df_metrics,
-                            column_config={
-                                "cliente": "Cliente",
-                                "media_resposta_ms": st.column_config.NumberColumn(
-                                    "Tempo Resposta (ms)", format="%d"
-                                ),
-                                "media_resolucao_ms": st.column_config.NumberColumn(
-                                    "Tempo Resolução (ms)", format="%d"
-                                ),
-                                "total_conversas": st.column_config.NumberColumn(
-                                    "Conversas", format="%d"
-                                ),
-                                "msgs_recebidas": st.column_config.NumberColumn(
-                                    "Msgs In", format="%d"
-                                ),
-                                "msgs_enviadas": st.column_config.NumberColumn(
-                                    "Msgs Out", format="%d"
-                                ),
-                                "resolvidas_ia": st.column_config.NumberColumn(
-                                    "IA", format="%d"
-                                ),
-                                "resolvidas_humano": st.column_config.NumberColumn(
-                                    "Humano", format="%d"
-                                ),
-                                "transferencias_humano": st.column_config.NumberColumn(
-                                    "Takeovers", format="%d"
-                                ),
-                                "followups_enviados": st.column_config.NumberColumn(
-                                    "Follow-ups", format="%d"
-                                ),
-                                "followups_convertidos": st.column_config.NumberColumn(
-                                    "Convertidos", format="%d"
-                                ),
-                            },
-                            hide_index=True,
-                            width="stretch",
-                        )
-
-                        # Gráfico de tempo de resposta por dia
-                        st.subheader("📈 Evolução do Tempo de Resposta")
-                        if selected_client == "Todos":
-                            cur.execute(
-                                """
-                                SELECT
-                                    m.date as dia,
-                                    ROUND(AVG(m.avg_response_time_ms)) as tempo_resposta_ms,
-                                    ROUND(AVG(m.avg_resolution_time_ms)) as tempo_resolucao_ms,
-                                    SUM(m.resolved_by_ai) as resolvidas_ia,
-                                    SUM(m.human_takeovers) as takeovers
-                                FROM metrics_daily m
-                                WHERE m.date >= %s AND m.date < %s
-                                GROUP BY m.date
-                                ORDER BY m.date
-                            """,
-                                (start_date, end_date_exclusive),
-                            )
-                        else:
-                            cur.execute(
-                                """
-                                SELECT
-                                    m.date as dia,
-                                    ROUND(AVG(m.avg_response_time_ms)) as tempo_resposta_ms,
-                                    ROUND(AVG(m.avg_resolution_time_ms)) as tempo_resolucao_ms,
-                                    SUM(m.resolved_by_ai) as resolvidas_ia,
-                                    SUM(m.human_takeovers) as takeovers
-                                FROM metrics_daily m
-                                JOIN clients c ON m.client_id = c.id
-                                WHERE m.date >= %s AND m.date < %s
-                                AND c.name = %s
-                                GROUP BY m.date
-                                ORDER BY m.date
-                            """,
-                                (start_date, end_date_exclusive, selected_client),
-                            )
-                        daily_metrics = cur.fetchall()
-
-                        if daily_metrics:
-                            df_dm = _sanitize_df(pd.DataFrame(daily_metrics))
-                            df_dm["dia"] = pd.to_datetime(df_dm["dia"])
-                            df_dm = df_dm.set_index("dia")
-                            st.line_chart(
-                                df_dm[["tempo_resposta_ms", "tempo_resolucao_ms"]]
-                            )
-                    else:
-                        st.info("Nenhuma métrica de tempo de resposta no período. Verifique se o metrics_worker está rodando.")
-        except Exception as e:
-            st.warning(f"⚠️ Erro ao buscar métricas de tempo: {e}")
+            st.warning(f"Erro ao buscar funil de vendas: {e}")
             st.caption("Verifique se a tabela metrics_daily existe (migration 004).")
 
-        st.divider()
-
         # ============================================================
-        # SEÇÃO 7: FERRAMENTAS MAIS USADAS
+        #  3) FERRAMENTAS: QUAL E A MAIS USADA? POR CLIENTE?
         # ============================================================
-        st.header("🔧 Ferramentas Mais Usadas")
+        st.markdown("---")
+        st.header("Qual ferramenta e a mais usada?")
+        st.caption(
+            "Ranking das ferramentas da IA (consultar CEP, viabilidade, CRM, etc). "
+            "Quantas vezes cada uma foi chamada e qual cliente mais usa cada ferramenta."
+        )
 
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
+                    # ---- RANKING GERAL ----
                     if selected_client == "Todos":
                         cur.execute(
                             """
                             SELECT
                                 event_data->>'tool' as ferramenta,
-                                COUNT(*) as total_usos,
-                                COUNT(DISTINCT chat_id) as conversas_distintas
-                            FROM conversation_events
-                            WHERE event_type = 'tool_used'
-                            AND event_data ? 'tool'
-                            AND created_at >= %s AND created_at < %s
+                                COUNT(*) as vezes_usada,
+                                COUNT(DISTINCT ce.chat_id) as em_quantas_conversas,
+                                COUNT(DISTINCT ce.client_id) as quantos_clientes
+                            FROM conversation_events ce
+                            WHERE ce.event_type = 'tool_used'
+                              AND ce.event_data ? 'tool'
+                              AND ce.created_at >= %s AND ce.created_at < %s
                             GROUP BY ferramenta
-                            ORDER BY total_usos DESC
+                            ORDER BY vezes_usada DESC
                             LIMIT 20
-                        """,
+                            """,
                             (start_date, end_date_exclusive),
                         )
                     else:
@@ -971,122 +630,303 @@ def render_admin_view():
                             """
                             SELECT
                                 event_data->>'tool' as ferramenta,
-                                COUNT(*) as total_usos,
-                                COUNT(DISTINCT ce.chat_id) as conversas_distintas
+                                COUNT(*) as vezes_usada,
+                                COUNT(DISTINCT ce.chat_id) as em_quantas_conversas,
+                                1 as quantos_clientes
                             FROM conversation_events ce
                             JOIN clients c ON ce.client_id = c.id
                             WHERE ce.event_type = 'tool_used'
-                            AND ce.event_data ? 'tool'
-                            AND ce.created_at >= %s AND ce.created_at < %s
-                            AND c.name = %s
+                              AND ce.event_data ? 'tool'
+                              AND ce.created_at >= %s AND ce.created_at < %s
+                              AND c.name = %s
                             GROUP BY ferramenta
-                            ORDER BY total_usos DESC
+                            ORDER BY vezes_usada DESC
                             LIMIT 20
-                        """,
+                            """,
                             (start_date, end_date_exclusive, selected_client),
                         )
                     tool_rows = cur.fetchall()
 
                     if tool_rows:
                         df_tools = _sanitize_df(pd.DataFrame(tool_rows))
-                        st.dataframe(
-                            df_tools,
-                            column_config={
-                                "ferramenta": "Ferramenta",
-                                "total_usos": st.column_config.NumberColumn(
-                                    "Total de Usos", format="%d"
-                                ),
-                                "conversas_distintas": st.column_config.NumberColumn(
-                                    "Conversas Distintas", format="%d"
-                                ),
-                            },
-                            hide_index=True,
-                            width="stretch",
-                        )
-                        if len(df_tools) > 1:
-                            st.bar_chart(df_tools.set_index("ferramenta")["total_usos"])
-                    else:
-                        st.info("Nenhum uso de ferramenta registrado no período.")
-        except Exception as e:
-            st.warning(f"⚠️ Erro ao buscar ferramentas: {e}")
-
-        st.divider()
-
-        # ============================================================
-        # SEÇÃO 8: ATIVIDADE RECENTE (EVENTOS)
-        # ============================================================
-        st.header("📡 Atividade Recente de Eventos")
-
-        try:
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    if selected_client == "Todos":
-                        cur.execute(
-                            """
-                            SELECT
-                                ce.event_type as tipo,
-                                COUNT(*) as total
-                            FROM conversation_events ce
-                            WHERE ce.created_at >= %s AND ce.created_at < %s
-                            GROUP BY ce.event_type
-                            ORDER BY total DESC
-                        """,
-                            (start_date, end_date_exclusive),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT
-                                ce.event_type as tipo,
-                                COUNT(*) as total
-                            FROM conversation_events ce
-                            JOIN clients c ON ce.client_id = c.id
-                            WHERE ce.created_at >= %s AND ce.created_at < %s
-                            AND c.name = %s
-                            GROUP BY ce.event_type
-                            ORDER BY total DESC
-                        """,
-                            (start_date, end_date_exclusive, selected_client),
-                        )
-                    event_rows = cur.fetchall()
-
-                    if event_rows:
-                        df_events = _sanitize_df(pd.DataFrame(event_rows))
-
-                        # Mapear nomes legíveis
-                        event_labels = {
-                            "msg_received": "Mensagens Recebidas",
-                            "ai_responded": "Respostas da IA",
-                            "human_takeover": "Transferências p/ Humano",
-                            "human_responded": "Respostas Humanas",
-                            "resolved": "Conversas Resolvidas",
-                            "tool_used": "Ferramentas Usadas",
-                            "followup_sent": "Follow-ups Enviados",
-                            "followup_converted": "Follow-ups Convertidos",
-                        }
-                        df_events["evento"] = df_events["tipo"].map(
-                            lambda x: event_labels.get(x, x)
+                        top = df_tools.iloc[0]
+                        st.success(
+                            f"Ferramenta mais usada: **{top['ferramenta']}** "
+                            f"— usada **{int(top['vezes_usada'])}** vezes "
+                            f"em **{int(top['em_quantas_conversas'])}** conversas"
                         )
 
-                        ev1, ev2 = st.columns([2, 1])
-                        with ev1:
+                        tc1, tc2 = st.columns([2, 1])
+                        with tc1:
                             st.dataframe(
-                                df_events[["evento", "total"]],
+                                df_tools,
                                 column_config={
-                                    "evento": "Tipo de Evento",
-                                    "total": st.column_config.NumberColumn(
-                                        "Total", format="%d"
-                                    ),
+                                    "ferramenta": "Ferramenta",
+                                    "vezes_usada": st.column_config.NumberColumn("Vezes Usada", format="%d"),
+                                    "em_quantas_conversas": st.column_config.NumberColumn("Em Quantas Conversas", format="%d"),
+                                    "quantos_clientes": st.column_config.NumberColumn("Quantos Clientes Usam", format="%d"),
                                 },
                                 hide_index=True,
                                 width="stretch",
                             )
-                        with ev2:
-                            st.bar_chart(df_events.set_index("evento")["total"])
+                        with tc2:
+                            if len(df_tools) > 1:
+                                st.bar_chart(df_tools.set_index("ferramenta")["vezes_usada"])
+
+                        # ---- QUAL CLIENTE USA QUAL FERRAMENTA ----
+                        st.subheader("Qual cliente usa qual ferramenta?")
+                        cur.execute(
+                            f"""
+                            SELECT
+                                c.name as cliente,
+                                event_data->>'tool' as ferramenta,
+                                COUNT(*) as vezes,
+                                COUNT(DISTINCT ce.chat_id) as conversas
+                            FROM conversation_events ce
+                            JOIN clients c ON ce.client_id = c.id
+                            WHERE ce.event_type = 'tool_used'
+                              AND ce.event_data ? 'tool'
+                              AND ce.created_at >= %s AND ce.created_at < %s
+                              {_cli_where}
+                            GROUP BY c.name, ferramenta
+                            ORDER BY c.name, vezes DESC
+                            """,
+                            (start_date, end_date_exclusive) + _cli_params,
+                        )
+                        tool_cli_rows = cur.fetchall()
+
+                        if tool_cli_rows:
+                            df_tc = _sanitize_df(pd.DataFrame(tool_cli_rows))
+                            st.dataframe(
+                                df_tc,
+                                column_config={
+                                    "cliente": "Cliente",
+                                    "ferramenta": "Ferramenta",
+                                    "vezes": st.column_config.NumberColumn("Vezes Usada", format="%d"),
+                                    "conversas": st.column_config.NumberColumn("Em Quantas Conversas", format="%d"),
+                                },
+                                hide_index=True,
+                                width="stretch",
+                            )
+
+                            # Resumo: top 1 por cliente
+                            st.subheader("Ferramenta favorita de cada cliente")
+                            top_per_cli = df_tc.loc[df_tc.groupby("cliente")["vezes"].idxmax()]
+                            for _, r in top_per_cli.iterrows():
+                                st.info(
+                                    f"**{r['cliente']}** usa mais: "
+                                    f"**{r['ferramenta']}** ({int(r['vezes'])} vezes)"
+                                )
                     else:
-                        st.info("Nenhum evento registrado no período.")
+                        st.info("Nenhuma ferramenta foi usada no periodo selecionado.")
         except Exception as e:
-            st.warning(f"⚠️ Erro ao buscar eventos: {e}")
+            st.warning(f"Erro ao buscar ferramentas: {e}")
+
+        # ============================================================
+        #  4) EVOLUCAO DIA A DIA (GRAFICO)
+        # ============================================================
+        st.markdown("---")
+        st.header("Evolucao dia a dia")
+        st.caption("Como os leads, resolucoes e perdas variaram por dia no periodo.")
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            m.date as dia,
+                            COALESCE(SUM(m.total_conversations), 0)::int as leads,
+                            COALESCE(SUM(m.resolved_by_ai), 0)::int as ia_resolveu,
+                            COALESCE(SUM(m.resolved_by_human), 0)::int as humano_resolveu,
+                            COALESCE(SUM(m.human_takeovers), 0)::int as humano_entrou,
+                            ROUND(COALESCE(AVG(m.avg_response_time_ms), 0))::int as tempo_resposta_ms
+                        FROM metrics_daily m
+                        JOIN clients c ON m.client_id = c.id
+                        WHERE m.date >= %s AND m.date < %s
+                        {_cli_where}
+                        GROUP BY m.date
+                        ORDER BY m.date
+                        """,
+                        (start_date, end_date_exclusive) + _cli_params,
+                    )
+                    daily_rows = cur.fetchall()
+
+                    if daily_rows:
+                        df_d = _sanitize_df(pd.DataFrame(daily_rows))
+                        df_d["dia"] = pd.to_datetime(df_d["dia"])
+                        df_d["sem_resolucao"] = (df_d["leads"] - df_d["ia_resolveu"] - df_d["humano_resolveu"]).clip(lower=0)
+                        df_dc = df_d.set_index("dia")
+
+                        st.subheader("Leads vs Quem Resolveu")
+                        st.line_chart(df_dc[["leads", "ia_resolveu", "humano_resolveu", "sem_resolucao"]])
+
+                        st.subheader("Tempo de Resposta da IA (milissegundos)")
+                        st.line_chart(df_dc[["tempo_resposta_ms"]])
+                    else:
+                        st.info("Sem dados diarios no periodo.")
+        except Exception as e:
+            st.warning(f"Erro ao gerar graficos: {e}")
+
+        # ============================================================
+        #  5) CUSTOS (QUANTO ESTA GASTANDO)
+        # ============================================================
+        st.markdown("---")
+        st.header("Custos de IA (quanto esta gastando)")
+        st.caption("Custos de OpenAI, Gemini e Whisper por cliente e por dia.")
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    _cost_where = "AND c.name = %s" if selected_client != "Todos" else ""
+                    _cost_join = "JOIN clients c ON u.client_id = c.id" if selected_client != "Todos" else ""
+                    _cost_params = (start_date, end_date_exclusive) + _cli_params
+
+                    # Grafico diario
+                    cur.execute(
+                        f"""
+                        SELECT DATE(u.created_at) as dia,
+                               ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
+                               ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
+                        FROM usage_tracking u
+                        {_cost_join}
+                        WHERE u.created_at >= %s AND u.created_at < %s
+                        {_cost_where}
+                        GROUP BY dia
+                        ORDER BY dia
+                        """,
+                        _cost_params,
+                    )
+                    chart_rows = cur.fetchall()
+                    if chart_rows:
+                        df_ch = _sanitize_df(pd.DataFrame(chart_rows))
+                        df_ch["dia"] = pd.to_datetime(df_ch["dia"])
+                        st.line_chart(df_ch.set_index("dia")[["custo_usd", "custo_brl"]])
+
+                    # Totais
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(DISTINCT u.chat_id) as total_conversas,
+                            ROUND(COALESCE(SUM(u.cost_usd), 0)::numeric, 4) as total_usd,
+                            ROUND(COALESCE(SUM(u.cost_usd * 12), 0)::numeric, 2) as total_brl,
+                            COALESCE(SUM(u.openai_input_tokens + u.openai_output_tokens), 0) as tokens_openai,
+                            COALESCE(SUM(u.gemini_input_tokens + u.gemini_output_tokens), 0) as tokens_gemini,
+                            COALESCE(SUM(u.whisper_seconds), 0) as segundos_audio,
+                            COALESCE(SUM(u.images_count), 0) as imagens
+                        FROM usage_tracking u
+                        {_cost_join}
+                        WHERE u.created_at >= %s AND u.created_at < %s
+                        {_cost_where}
+                        """,
+                        _cost_params,
+                    )
+                    tot = cur.fetchone()
+
+                    if tot and float(tot.get("total_usd") or 0) > 0:
+                        st.subheader("Resumo do Periodo")
+                        r1, r2, r3 = st.columns(3)
+                        r1.metric("Custo Total",
+                                  f"R$ {float(tot['total_brl']):.2f}",
+                                  f"USD {float(tot['total_usd']):.4f}")
+                        r2.metric("Conversas Atendidas", int(tot["total_conversas"]))
+                        r3.metric("Imagens Processadas", int(tot["imagens"]))
+
+                        r4, r5, r6 = st.columns(3)
+                        r4.metric("Tokens OpenAI", f"{int(tot['tokens_openai']):,}")
+                        r5.metric("Tokens Gemini", f"{int(tot['tokens_gemini']):,}")
+                        r6.metric("Audio Transcrito (seg)", f"{int(tot['segundos_audio']):,}")
+
+                    # Por provider e cliente
+                    st.subheader("Custo por Cliente e Modelo de IA")
+                    cur.execute(
+                        f"""
+                        SELECT
+                            c.name as cliente,
+                            u.provider as modelo_ia,
+                            COUNT(DISTINCT u.chat_id) as conversas,
+                            ROUND(SUM(u.cost_usd)::numeric, 4) as custo_usd,
+                            ROUND(SUM(u.cost_usd * 12)::numeric, 2) as custo_brl
+                        FROM usage_tracking u
+                        JOIN clients c ON u.client_id = c.id
+                        WHERE u.created_at >= %s AND u.created_at < %s
+                        {_cli_where}
+                        GROUP BY c.name, u.provider
+                        ORDER BY custo_brl DESC
+                        """,
+                        (start_date, end_date_exclusive) + _cli_params,
+                    )
+                    prov_rows = cur.fetchall()
+                    if prov_rows:
+                        df_prov = _sanitize_df(pd.DataFrame(prov_rows))
+                        st.dataframe(
+                            df_prov,
+                            column_config={
+                                "cliente": "Cliente",
+                                "modelo_ia": "Modelo de IA",
+                                "conversas": st.column_config.NumberColumn("Conversas", format="%d"),
+                                "custo_usd": st.column_config.NumberColumn("Custo (USD)", format="$%.4f"),
+                                "custo_brl": st.column_config.NumberColumn("Custo (BRL)", format="R$%.2f"),
+                            },
+                            hide_index=True,
+                            width="stretch",
+                        )
+                    else:
+                        st.info("Nenhum dado de custo no periodo.")
+        except Exception as e:
+            st.warning(f"Erro ao buscar custos: {e}")
+
+        # ============================================================
+        #  6) REGISTRO TECNICO DE EVENTOS (ESCONDIDO POR PADRAO)
+        # ============================================================
+        st.markdown("---")
+        with st.expander("Ver registro tecnico de eventos (avancado)", expanded=False):
+            try:
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"""
+                            SELECT ce.event_type as tipo, COUNT(*) as total
+                            FROM conversation_events ce
+                            {"JOIN clients c ON ce.client_id = c.id" if selected_client != "Todos" else ""}
+                            WHERE ce.created_at >= %s AND ce.created_at < %s
+                            {_cli_where}
+                            GROUP BY ce.event_type
+                            ORDER BY total DESC
+                            """,
+                            (start_date, end_date_exclusive) + _cli_params,
+                        )
+                        event_rows = cur.fetchall()
+                        if event_rows:
+                            df_ev = _sanitize_df(pd.DataFrame(event_rows))
+                            labels = {
+                                "msg_received": "Mensagens Recebidas",
+                                "ai_responded": "Respostas da IA",
+                                "human_takeover": "Humano Assumiu",
+                                "human_responded": "Humano Respondeu",
+                                "resolved": "Conversa Resolvida",
+                                "tool_used": "Ferramenta Usada",
+                                "followup_sent": "Follow-up Enviado",
+                                "followup_converted": "Follow-up Convertido",
+                            }
+                            df_ev["evento"] = df_ev["tipo"].map(lambda x: labels.get(x, x))
+                            ev1, ev2 = st.columns([2, 1])
+                            with ev1:
+                                st.dataframe(
+                                    df_ev[["evento", "total"]],
+                                    column_config={
+                                        "evento": "Tipo de Evento",
+                                        "total": st.column_config.NumberColumn("Total", format="%d"),
+                                    },
+                                    hide_index=True,
+                                    width="stretch",
+                                )
+                            with ev2:
+                                st.bar_chart(df_ev.set_index("evento")["total"])
+                        else:
+                            st.info("Nenhum evento no periodo.")
+            except Exception as e:
+                st.warning(f"Erro ao buscar eventos: {e}")
 
     with tab6:
         st.header("🚨 Centro de Alertas & Debug")

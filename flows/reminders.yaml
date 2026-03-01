@@ -16,6 +16,7 @@ concurrency:
 tasks:
   - id: process_reminders
     type: io.kestra.plugin.scripts.python.Commands
+    pythonVersion: "3.11"
 
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
