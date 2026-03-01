@@ -1080,6 +1080,285 @@ def get_metrics_summary(client_id: str) -> dict:
         return {}
 
 
+# ============================================================================
+# METRICS DASHBOARD QUERIES (ADR-003 Extended)
+# ============================================================================
+
+
+def get_tools_usage_breakdown(client_id: str, days: int = 30) -> list:
+    """
+    Retorna breakdown de tools usadas por este cliente.
+    Conta quantas vezes cada tool foi invocada.
+    """
+    if not DB_URL or not client_id:
+        return []
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        event_data->>'tool' as tool_name,
+                        COUNT(*) as call_count,
+                        COUNT(DISTINCT chat_id) as unique_conversations
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type = 'tool_used'
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                      AND event_data->>'tool' IS NOT NULL
+                    GROUP BY event_data->>'tool'
+                    ORDER BY call_count DESC
+                    """,
+                    (client_id, days),
+                )
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar tools usage: {e}")
+        return []
+
+
+def get_conversations_by_handler(client_id: str, days: int = 30) -> dict:
+    """
+    Retorna quantas conversas foram atendidas por IA vs humano.
+    - total_conversations: total de conversas únicas
+    - ai_only: conversas onde só a IA respondeu (sem humano)
+    - human_involved: conversas onde o humano entrou
+    - waiting_human: conversas em pausa aguardando humano
+    """
+    if not DB_URL or not client_id:
+        return {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Total de conversas únicas com msg_received
+                cur.execute(
+                    """
+                    SELECT COUNT(DISTINCT chat_id) as total
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type = 'msg_received'
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                    """,
+                    (client_id, days),
+                )
+                total = cur.fetchone()["total"]
+
+                # Conversas com resposta da IA
+                cur.execute(
+                    """
+                    SELECT COUNT(DISTINCT chat_id) as ai_served
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type = 'ai_responded'
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                    """,
+                    (client_id, days),
+                )
+                ai_served = cur.fetchone()["ai_served"]
+
+                # Conversas onde humano entrou (human_responded OU human_takeover)
+                cur.execute(
+                    """
+                    SELECT COUNT(DISTINCT chat_id) as human_involved
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type IN ('human_responded', 'human_takeover')
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                    """,
+                    (client_id, days),
+                )
+                human_involved = cur.fetchone()["human_involved"]
+
+                # Conversas aguardando humano (human_takeover sem resolução)
+                cur.execute(
+                    """
+                    SELECT COUNT(DISTINCT ac.chat_id) as waiting
+                    FROM active_conversations ac
+                    WHERE ac.client_id = %s
+                      AND ac.status = 'active'
+                      AND ac.last_role IN ('user', 'human')
+                      AND ac.chat_id IN (
+                          SELECT DISTINCT chat_id
+                          FROM conversation_events
+                          WHERE client_id = %s
+                            AND event_type = 'human_takeover'
+                            AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                      )
+                      AND ac.chat_id NOT IN (
+                          SELECT DISTINCT chat_id
+                          FROM conversation_events
+                          WHERE client_id = %s
+                            AND event_type = 'resolved'
+                            AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                      )
+                    """,
+                    (client_id, days, client_id, days, client_id, days),
+                )
+                waiting_human = cur.fetchone()["waiting"]
+
+                return {
+                    "total_conversations": total,
+                    "ai_served": ai_served,
+                    "ai_only": ai_served - human_involved if ai_served > human_involved else 0,
+                    "human_involved": human_involved,
+                    "waiting_human": waiting_human,
+                }
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar conversations by handler: {e}")
+        return {}
+
+
+def get_response_time_stats(client_id: str, days: int = 30) -> dict:
+    """
+    Retorna estatísticas de tempo de resposta (webhook → envio).
+    """
+    if not DB_URL or not client_id:
+        return {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COALESCE(AVG((event_data->>'response_time_ms')::int), 0)::int as avg_ms,
+                        COALESCE(MIN((event_data->>'response_time_ms')::int), 0)::int as min_ms,
+                        COALESCE(MAX((event_data->>'response_time_ms')::int), 0)::int as max_ms,
+                        COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (
+                            ORDER BY (event_data->>'response_time_ms')::int
+                        ), 0)::int as median_ms,
+                        COUNT(*) as sample_count
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type = 'ai_responded'
+                      AND event_data ? 'response_time_ms'
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                    """,
+                    (client_id, days),
+                )
+                result = cur.fetchone()
+                return dict(result) if result else {}
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar response time stats: {e}")
+        return {}
+
+
+def get_followup_stats(client_id: str, days: int = 30) -> dict:
+    """
+    Retorna estatísticas de follow-up: enviados, respondidos (converted), taxa.
+    """
+    if not DB_URL or not client_id:
+        return {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE event_type = 'followup_sent') as sent,
+                        COUNT(*) FILTER (WHERE event_type = 'followup_converted') as converted,
+                        COUNT(DISTINCT chat_id) FILTER (WHERE event_type = 'followup_sent') as unique_chats_sent,
+                        COUNT(DISTINCT chat_id) FILTER (WHERE event_type = 'followup_converted') as unique_chats_converted
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type IN ('followup_sent', 'followup_converted')
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                    """,
+                    (client_id, days),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return {"sent": 0, "converted": 0, "conversion_rate": 0}
+                sent = row["sent"] or 0
+                converted = row["converted"] or 0
+                rate = round((converted / sent * 100), 1) if sent > 0 else 0
+                return {
+                    "sent": sent,
+                    "converted": converted,
+                    "unique_chats_sent": row["unique_chats_sent"] or 0,
+                    "unique_chats_converted": row["unique_chats_converted"] or 0,
+                    "conversion_rate": rate,
+                }
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar followup stats: {e}")
+        return {}
+
+
+def get_resolution_stats(client_id: str, days: int = 30) -> dict:
+    """
+    Retorna estatísticas de resolução: por IA, por humano, pendente.
+    """
+    if not DB_URL or not client_id:
+        return {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE event_data->>'resolved_by' = 'ai'
+                        ) as resolved_by_ai,
+                        COUNT(*) FILTER (
+                            WHERE event_data->>'resolved_by' = 'human'
+                        ) as resolved_by_human,
+                        COUNT(DISTINCT chat_id) as unique_resolved_chats
+                    FROM conversation_events
+                    WHERE client_id = %s
+                      AND event_type = 'resolved'
+                      AND created_at >= CURRENT_DATE - make_interval(days => %s)
+                    """,
+                    (client_id, days),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else {}
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar resolution stats: {e}")
+        return {}
+
+
+def get_metrics_daily_series(client_id: str, days: int = 30) -> list:
+    """
+    Retorna série temporal de métricas para gráficos.
+    """
+    if not DB_URL or not client_id:
+        return []
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        date,
+                        total_conversations,
+                        total_messages_in,
+                        total_messages_out,
+                        resolved_by_ai,
+                        resolved_by_human,
+                        human_takeovers,
+                        avg_response_time_ms,
+                        followups_sent,
+                        followups_converted,
+                        tools_used,
+                        total_cost_usd
+                    FROM metrics_daily
+                    WHERE client_id = %s
+                      AND date >= CURRENT_DATE - make_interval(days => %s)
+                    ORDER BY date ASC
+                    """,
+                    (client_id, days),
+                )
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar série temporal: {e}")
+        return []
+
+
 # Initialize error_logs table on module load
 if not _error_table_initialized:
     init_error_log_table()

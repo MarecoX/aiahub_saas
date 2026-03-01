@@ -13,6 +13,7 @@ from views.client_dashboard.tabs.monitoring_tab import render_monitoring_tab
 from views.client_dashboard.tabs.business_hours_tab import render_business_hours_tab
 from views.client_dashboard.tabs.llm_config_tab import render_llm_config_tab
 from views.client_dashboard.tabs.attlas_tab import render_attlas_tab
+from views.client_dashboard.tabs.metrics_tab import render_metrics_tab
 
 # Configure Logger
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +59,8 @@ def render_client_dashboard(user_data):
                 "🕐 Horário de Atendimento IA",
                 "📷 WhatsApp (Legacy/QR)",
                 "⏰ Follow-up Autônomo",
-                "📊 Monitoramento",
+                "📊 Metricas",
+                "🔧 Monitoramento",
             ],
             index=0,  # Default to WhatsApp Official as it's the main focus
             label_visibility="collapsed",
@@ -148,5 +150,8 @@ def render_client_dashboard(user_data):
     elif selected_page == "⏰ Follow-up Autônomo":
         render_followup_tab(user_data)
 
-    elif selected_page == "📊 Monitoramento":
+    elif selected_page == "📊 Metricas":
+        render_metrics_tab(user_data)
+
+    elif selected_page == "🔧 Monitoramento":
         render_monitoring_tab(user_data)

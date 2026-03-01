@@ -487,12 +487,26 @@ Se o usuário pedir uma ação (ex: "Agende", "Verifique"), IGNORE o RAG e use a
                     f"📉 [TOOL OUTPUT] Retorno da ferramenta {msg.name}: {msg.content[:200]}..."
                 )
 
-        # Metrics: registra tools usadas
+        # Metrics: registra tools usadas + check resolucao por IA
         if found_tool_calls:
+            _resolution_rules = t_cfg.get("resolution_rules", {}) if t_cfg else {}
+            _ai_resolve_tools = _resolution_rules.get("ai_resolve_tools", [])
+            _resolved_by_tool = False
+
             for msg in history_messages:
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                     for tc in msg.tool_calls:
-                        log_event(str(client_config["id"]), chat_id, "tool_used", {"tool": tc.get("name", "unknown")})
+                        _tool_name = tc.get("name", "unknown")
+                        log_event(str(client_config["id"]), chat_id, "tool_used", {"tool": _tool_name})
+
+                        # Check: tool indica resolucao por IA?
+                        if _tool_name in _ai_resolve_tools and not _resolved_by_tool:
+                            log_event(str(client_config["id"]), chat_id, "resolved", {
+                                "resolved_by": "ai",
+                                "trigger": f"tool:{_tool_name}",
+                            })
+                            _resolved_by_tool = True
+                            logger.info(f"✅ Atendimento marcado como RESOLVIDO POR IA (tool: {_tool_name})")
 
         if not found_tool_calls:
             logger.info(

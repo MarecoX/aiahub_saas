@@ -151,6 +151,21 @@ async def run_ingest(webhook_data):
                         log_event(str(_cid), chat_id, "human_responded")
                         if is_permanent_stop:
                             log_event(str(_cid), chat_id, "human_takeover", {"reason": "permanent_stop"})
+
+                        # Check: mensagem do humano indica resolucao?
+                        _tools_cfg = _cfg.get("tools_config") or {}
+                        _res_rules = _tools_cfg.get("resolution_rules", {})
+                        _human_keywords = _res_rules.get("human_resolve_keywords", [])
+                        if _human_keywords and outgoing_text:
+                            _msg_lower = outgoing_text.strip().lower()
+                            for _kw in _human_keywords:
+                                if _kw.strip().lower() in _msg_lower:
+                                    log_event(str(_cid), chat_id, "resolved", {
+                                        "resolved_by": "human",
+                                        "trigger": f"keyword:{_kw}",
+                                    })
+                                    logger.info(f"✅ Atendimento marcado como RESOLVIDO POR HUMANO (keyword: {_kw})")
+                                    break
             except Exception as e:
                 logger.error(f"\u26a0\ufe0f Erro ao trackear resposta humana: {e}")
             # ------------------------------------------------
